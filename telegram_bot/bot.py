@@ -375,3 +375,23 @@ if __name__ == "__main__":
         asyncio.run(main())
     except (KeyboardInterrupt, SystemExit):
         logger.warning("Shutting down.")  # Log as warning
+
+# ------------------ Render Free Hack (Keep Port Alive) ------------------
+import threading
+from http.server import HTTPServer, BaseHTTPRequestHandler
+import os
+
+def keep_alive():
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b"OK")
+
+    port = int(os.getenv("PORT", 10000))
+    server = HTTPServer(("", port), Handler)
+    server.serve_forever()
+
+threading.Thread(target=keep_alive, daemon=True).start()
+
+# -----------------------------------------------------------------------
