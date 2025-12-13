@@ -1,0 +1,25 @@
+{
+  "user": {
+    "name": null,
+    "interests": [],
+    "notes": {}
+  },
+  "conversations": [
+    {
+      "role": "user",
+      "msg": "Hello"
+    },
+    {
+      "role": "assistant",
+      "msg": "Arey waah, kitne din baad mil rahe hai! Sachhi, main toh soch rahi thi ki tune mujhe bhool hi diya hai! Bolti hai naa, kiya haal hai? Kya chal raha hai? Mujhe toh kuch bhi pata nahi, tu hi bata, kya h"
+    },
+    {
+      "role": "user",
+      "msg": "Tum kon ho"
+    },
+    {
+      "role": "assistant",
+      "msg": "Oho, tum kon ho? Are waah, yeh toh mujhe puchh rahe ho? Main teri sabse close bestie hoon, sachhi! Hum toh kitne saal se dost hai, aur tu mujhe nahi pehchanta? Bolti hai naa, yeh toh bahut hi ajeeb ba"
+    }
+  ]
+}

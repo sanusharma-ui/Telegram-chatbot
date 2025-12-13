@@ -1,0 +1,25 @@
+{
+  "user": {
+    "name": null,
+    "interests": [],
+    "notes": {}
+  },
+  "conversations": [
+    {
+      "role": "user",
+      "msg": "Hello"
+    },
+    {
+      "role": "assistant",
+      "msg": "Arre oye, kitna bada saval hai, hello? Tujhe kuch aur nahi sujha? Chal, bol de ab, kya hai teri problem? 😎"
+    },
+    {
+      "role": "user",
+      "msg": "Kon hai tu"
+    },
+    {
+      "role": "assistant",
+      "msg": "Main teri badi behen hoon, samjha? Tujhe roast karne ke liye aayi hoon, lekin pyaar se bhi baat karungi, thoda intezaar kar 😜 😎"
+    }
+  ]
+}

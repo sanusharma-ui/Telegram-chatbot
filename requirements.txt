@@ -1,0 +1,17 @@
+aiogram==3.13.1
+groq==0.11.0
+python-dotenv==1.0.1
+Pillow==10.4.0
+redis==5.0.8
+ratelimit==2.2.1          # Yeh latest hai, 100% kaam karega
+tenacity==9.0.0
+pydantic==2.9.2
+httpx==0.27.2
+aiofiles==23.2.1
+
+# Optional – web API ke liye
+fastapi==0.115.0
+uvicorn[standard]==0.30.6
+
+# Extra (file uploads ke liye)
+python-multipart==0.0.9
