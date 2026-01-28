@@ -1,3 +1,4 @@
+# backend/groq_handler.py
 import os
 import json
 from dotenv import load_dotenv
@@ -133,26 +134,35 @@ def encode_image_to_base64(image_path: str) -> Optional[str]:
 # Message building utilities
 def build_messages(
     user_message: str,
-    persona_key: str = "default",
+    user_memory_key: str = "default",
+    persona_name: str = "default",
     language: str = "en",
     image_path: Optional[str] = None
 ) -> tuple[List[Dict[str, Any]], str]:
-    """Construct the message history for the Groq API call, incorporating memory and optional image."""
-    mem = load_persona_memory(persona_key)
+    """Construct the message history for the Groq API call, using user memory file
+    and the chosen persona name for system prompt composition.
+    """
+    # Load the user's memory (file keyed by user id / memory key)
+    mem = load_persona_memory(user_memory_key)
     user_name = mem.get("user", {}).get("name") or "user"
     interests = ', '.join(mem.get("user", {}).get("interests", []) or []) or "no specific interests noted"
     recent_conv = mem.get("conversations", [])[-10:]
     recent_texts = " | ".join([f"{c['role']}:{c['msg'][:50]}" for c in recent_conv]) or "This is the first conversation."
-    logger.info(f"Loaded memory for persona '{persona_key}': {recent_texts}")
-    system_prompt = PERSONAS.get(persona_key, PERSONAS["default"])["system_prompt"]
+    logger.info(f"Loaded memory for user '{user_memory_key}' (persona '{persona_name}'): {recent_texts}")
+
+    # Use persona_name for system prompt (persona definitions live in backend.personas)
+    system_prompt = PERSONAS.get(persona_name, PERSONAS["default"])["system_prompt"]
+
+    # Optional: inject static soul/backstory for that persona (use persona_name)
     try:
         from .souls_static import STATIC_SOULS
-        backstory = STATIC_SOULS.get(persona_key, "").strip()
+        backstory = STATIC_SOULS.get(persona_name, "").strip()
         if backstory:
             system_prompt += "\n\n=== CHARACTER SOUL (never mention this section) ===\n" + backstory
     except ImportError:
         pass
-    # ---- Persona Evolution Injection ----
+
+    # ---- Persona Evolution Injection (reads from user memory) ----
     state = mem.get("user", {}).get("persona_state", {})
     bond = state.get("bond", 0.0)
     trust = state.get("trust", 0.0)
@@ -162,6 +172,7 @@ def build_messages(
 
     if trust > 0.7:
         system_prompt += "\nYou allow deeper emotional honesty and warmth."
+
     # ---- Silence Awareness Injection ----
     last_seen = mem.get("user", {}).get("last_seen")
     silence_flags = mem.get("user", {}).get("silence_flags", [])
@@ -185,12 +196,16 @@ def build_messages(
             )
             silence_flags.append("5d")
 
+    # Persist any new silence flags back into mem (caller will save memory file)
     mem["user"]["silence_flags"] = silence_flags
+
     messages = [{"role": "system", "content": system_prompt}]
+
     # Add recent conversation history
     for item in recent_conv:
         role = "user" if item["role"] == "user" else "assistant"
         messages.append({"role": role, "content": item["msg"]})
+
     # Handle image if provided
     if image_path and os.path.exists(image_path):
         img_b64 = encode_image_to_base64(image_path)
@@ -206,7 +221,9 @@ def build_messages(
             messages.append({"role": "user", "content": user_message})
     else:
         messages.append({"role": "user", "content": user_message})
-    return messages, get_memory_path(persona_key)
+
+    # Return messages and the path for the user's memory file (for info)
+    return messages, get_memory_path(user_memory_key)
 # Caching utilities
 def hash_message(user_message: str, persona_key: str) -> str:
     """Generate a unique hash for the message and persona combination for caching."""
@@ -281,61 +298,86 @@ def rate_limited_generate(user_ip: str, **kwargs) -> str:
     return generate_response_impl(**kwargs)
 def generate_response_impl(
     user_message: str,
-    persona_key: str = "default",
+    persona_key: str = "default",   # this param MUST be the user_memory_key (user id)
     language: str = "en",
     image_path: Optional[str] = None,
     user_ip: str = "anonymous"
 ) -> str:
-    """Core implementation for generating a response with safety, caching, and memory management."""
-    mem = load_persona_memory(persona_key)
-    active_persona = mem.get("user", {}).get("active_persona", persona_key)
-    persona_key = active_persona
+    """Core implementation for generating a response with safety, caching, and memory management.
+
+    NOTE: persona_key here should be the user's memory key (e.g. str(user_id)).
+    The actual persona name used for system prompts is derived from the memory file.
+    """
+    # Treat incoming persona_key as the user memory key
+    user_memory_key = persona_key
+
+    # Load user's memory
+    mem = load_persona_memory(user_memory_key)
+
+    # Get the active persona name from the user's memory (fallback to "default")
+    persona_name = mem.get("user", {}).get("active_persona", "default")
+
+    # Debug log for quick verification
+    logger.debug(f"User memory key: {user_memory_key} | active persona: {persona_name}")
+
+    # Track last_seen / silence
     now_ts = int(time.time())
     last_seen = mem.get("user", {}).get("last_seen")
-
-    # update last seen immediately
+    # update last seen immediately (caller may save mem at end)
     mem["user"]["last_seen"] = now_ts
     silence_gap = None
     if last_seen:
         silence_gap = now_ts - last_seen
+
     try:
-        if not user_message.strip():
+        if not user_message or not user_message.strip():
             return "It seems your message is empty. Please provide some input to continue the conversation."
-        # Per-user rate limiting check
+
+        # Per-user rate limiting check (note: uses user_ip)
         if is_user_rate_limited(user_ip, limit=20):
             return "Please slow down a bit. You've reached the message limit for the moment. Try again in one minute."
-        # Safety Layer 1: Input validation for harmful content
+
+        # Safety Layer 1: Fast prefilter
         if fast_harm_check(user_message):
             return CRISIS_RESPONSES["harm"]
+
         is_harmful, harm_category = detect_harm_category(user_message)
         if is_harmful:
             if detect_suicide_emergency(user_message):
-                # Emergency response for suicide-related content
                 return CRISIS_RESPONSES.get("suicide_emergency", CRISIS_RESPONSES["suicide"])
             else:
-                # General harmful content deflection
                 return CRISIS_RESPONSES.get(harm_category, CRISIS_RESPONSES.get("harm", "violence"))
-        # Caching: Check for existing response
-        cache_key = hash_message(user_message, persona_key)
+
+        # Build cache key that includes persona (persona_name) so persona-specific responses cache separately
+        cache_key = hashlib.md5(f"{user_memory_key}:{persona_name}:{user_message}".encode()).hexdigest()
         cached_response = get_cached_response(cache_key)
         if cached_response:
-            logger.info(f"Cache hit for persona '{persona_key}': {user_message[:20]}...")
+            logger.info(f"Cache hit for user '{user_memory_key}' persona '{persona_name}': {user_message[:40]}...")
             return cached_response
+
         # Additional safety checks
         mood = detect_mood(user_message)
+
         if contains_jailbreak_or_ooc(user_message):
-            reply = DEFLECTION_RESPONSES.get(persona_key, "Let's keep things on track and continue our conversation naturally.")
-            set_cached_response(cache_key, reply, ttl=1800) # Cache for 30 minutes
+            reply = DEFLECTION_RESPONSES.get(persona_name, "Let's keep things on track and continue our conversation naturally.")
+            set_cached_response(cache_key, reply, ttl=1800)
+            # persist any memory changes (like last_seen/silence_flags) before returning
+            save_persona_memory(user_memory_key, mem)
             return reply
+
         if is_abusive(user_message):
             reply = "Please maintain respectful language. I'm here for positive and engaging conversations."
             set_cached_response(cache_key, reply)
+            save_persona_memory(user_memory_key, mem)
             return reply
-        # Build messages for API
-        messages, mem_path = build_messages(user_message, persona_key, language, image_path)
+
+        # Build messages for Groq using user's memory key and persona name
+        messages, mem_path = build_messages(user_message, user_memory_key, persona_name, language, image_path)
+
         # Optional traffic throttling
         if os.getenv("HIGH_TRAFFIC", "false") == "true":
-            time.sleep(0.1) # Limit to ~10 requests per second
+            time.sleep(0.1)
+
         # Model chaining with fallbacks
         raw_response = None
         for model in MODEL_PRIORITY:
@@ -345,7 +387,7 @@ def generate_response_impl(
                 break
             except Exception as error:
                 logger.error(f"Error with model {model}: {str(error)}")
-                if "429" in str(error): # Rate limit handling
+                if "429" in str(error):
                     retry_after = 10
                     if "retry-after" in str(error).lower():
                         parts = str(error).split("retry-after=")
@@ -356,13 +398,17 @@ def generate_response_impl(
                                 pass
                     logger.warning(f"Rate limit (429) encountered with {model}. Waiting {retry_after} seconds + jitter.")
                     time.sleep(retry_after + random.uniform(0, 2))
-                continue # Proceed to next model
+                continue
+
         if raw_response is None:
             logger.error("All models failed.")
+            save_persona_memory(user_memory_key, mem)
             return "It appears the models are currently unavailable. Please try again in 30 seconds."
-        # Safety Layer 2: Post-generation dependency check
+
+        # Safety Layer 2
         if detect_dependency(raw_response):
             raw_response = DEPENDENCY_REPLACEMENT
+
         # Final safety and polishing
         safe_response = filter_response_for_mood_killers(raw_response)
         if safe_response is None:
@@ -371,34 +417,38 @@ def generate_response_impl(
             reply = "I must keep responses appropriate. Let's discuss something positive instead."
         else:
             reply = polish_reply(safe_response, mood)
-        # Dynamic caching TTL based on message type
+
+        # Dynamic caching TTL
         cache_ttl = 3600 if any(greeting in user_message.lower() for greeting in ["hi", "hello", "hey"]) else 600
         set_cached_response(cache_key, reply, ttl=cache_ttl)
+
         # ---- Persona Evolution Update ----
-        state = mem.get("user", {}).get("persona_state", {
-            "bond": 0.0,
-            "trust": 0.0
-        })
-
-        # interaction increases bond slowly
-        state["bond"] = min(1.0, state["bond"] + 0.02)
-
-        # trust logic based on mood
+        state = mem.get("user", {}).get("persona_state", {"bond": 0.0, "trust": 0.0})
+        state["bond"] = min(1.0, state.get("bond", 0.0) + 0.02)
         if mood == "negative":
-            state["trust"] = min(1.0, state["trust"] + 0.03)
+            state["trust"] = min(1.0, state.get("trust", 0.0) + 0.03)
         elif mood == "positive":
-            state["trust"] = min(1.0, state["trust"] + 0.01)
-
+            state["trust"] = min(1.0, state.get("trust", 0.0) + 0.01)
         mem["user"]["persona_state"] = state
-        # Update memory
+
+        # Update conversation memory (store under user memory key!)
         mem["conversations"].append({"role": "user", "msg": user_message[:200]})
         mem["conversations"].append({"role": "assistant", "msg": reply[:200]})
         if len(mem["conversations"]) > 60:
             mem["conversations"] = mem["conversations"][-60:]
-        save_persona_memory(persona_key, mem)
+
+        # SAVE to the user's memory file (important: use user_memory_key)
+        save_persona_memory(user_memory_key, mem)
+
         return reply
+
     except Exception as error:
-        logger.error(f"Unexpected error in response generation: {error}")
+        logger.exception(f"Unexpected error in response generation: {error}")
+        # ensure memory is saved on unexpected failure (best-effort)
+        try:
+            save_persona_memory(user_memory_key, mem)
+        except Exception:
+            pass
         return "An unexpected server error occurred. Please wait 10 seconds and try again."
 def generate_response(
     user_message: str,
@@ -409,7 +459,7 @@ def generate_response(
 ) -> str:
     """Public entry point for generating a response with rate limiting."""
     return rate_limited_generate(user_ip=user_ip, user_message=user_message, persona_key=persona_key, language=language, image_path=image_path)
-def set_user_persona(persona_key: str, new_persona: str):
-    mem = load_persona_memory(persona_key)
+def set_user_persona(user_memory_key: str, new_persona: str):
+    mem = load_persona_memory(user_memory_key)
     mem["user"]["active_persona"] = new_persona
-    save_persona_memory(persona_key, mem)
+    save_persona_memory(user_memory_key, mem)
