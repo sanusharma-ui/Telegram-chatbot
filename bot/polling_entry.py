@@ -20,27 +20,30 @@ dp = Dispatcher()
 # Keep handler minimal — delegate to background task to avoid blocking polling loop
 @dp.message()
 async def handle_all(message):
-    user_text = message.text or ""
+    user_text = (message.text or "").strip()
     user_id = message.from_user.id
     chat_id = message.chat.id
+
+    # --- Immediate /persona handling (synchronous; no background task) ---
+    if user_text.startswith("/persona"):
+        parts = user_text.split(maxsplit=1)
+        if len(parts) == 2:
+            persona = parts[1].strip()
+            from backend.personas import PERSONAS
+            if persona in PERSONAS:
+                from backend.groq_handler import set_user_persona
+                set_user_persona(str(user_id), persona)
+                await message.reply(
+                    f"✅ Persona switched to *{PERSONAS[persona]['name']}* 🔥",
+                    parse_mode="Markdown"
+                )
+                return
+        await message.reply("Usage: /persona <name>\nAvailable: " + ", ".join(PERSONAS.keys()))
+        return
+
+    # --- existing background flow (unchanged) ---
     async def bg():
         try:
-            if user_text.startswith("/persona"):
-                parts = user_text.split()
-                if len(parts) == 2 and parts[1] in PERSONAS:
-                    from backend.groq_handler import set_user_persona
-                    set_user_persona(str(user_id), parts[1])
-
-                    await message.reply(
-                        f"Persona switched to *{PERSONAS[parts[1]]['name']}* 🔥",
-                        parse_mode="Markdown"
-                    )
-                    return
-                else:
-                    await message.reply(
-                        "Invalid persona.\nTry: " + ", ".join(PERSONAS.keys())
-                    )
-                    return
             ack = await message.reply("Processing... ⏳")
             reply = await asyncio.to_thread(generate_response,
                 user_message=user_text,
@@ -53,12 +56,10 @@ async def handle_all(message):
         # edit ack
         try:
             from interaction.printer import send_human
-
             try:
                 await bot.delete_message(chat_id, ack.message_id)
             except:
                 pass
-
             await send_human(bot, chat_id, reply)
         except Exception:
             await send_human(bot, chat_id, reply)
