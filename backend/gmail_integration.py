@@ -168,13 +168,12 @@ def build_flow(state: Optional[str] = None, scopes: Optional[List[str]] = None) 
     }
 
     scopes = scopes or SCOPES_READ
+    # Using Flow.from_client_config is OK if config is correct; keep this but be defensive
     flow = Flow.from_client_config(client_config, scopes=scopes, redirect_uri=OAUTH_REDIRECT)
-    # If caller provided a state (rare), attach it so fetch_token can validate it later
     if state:
         try:
             flow.state = state
         except Exception:
-            # not critical: authorization_url will generate and return a state
             logger.debug("Could not set flow.state explicitly; letting library generate state")
     return flow
 
@@ -185,7 +184,8 @@ def get_auth_url_for_user(user_id: str, need_send: bool = False) -> str:
     If need_send is True, include send/compose scopes.
     """
     scopes = list(SCOPES_READ) + (SCOPES_DRAFT if need_send else [])
-    # create flow with explicit scopes
+    assert scopes, "SCOPES must not be empty"
+
     flow = build_flow(scopes=scopes)
     auth_url, state = flow.authorization_url(access_type="offline", prompt="consent", include_granted_scopes="true")
 
@@ -198,7 +198,6 @@ def get_auth_url_for_user(user_id: str, need_send: bool = False) -> str:
     logger.debug("OAuth scopes=%s", scopes)
     logger.debug("OAuth url (truncated)=%s", auth_url[:400])
 
-    # quick sanity: ensure scope= in the url (if missing, something went wrong)
     if "scope=" not in auth_url:
         logger.warning("Auth URL missing scope parameter; url=%s", auth_url)
 
