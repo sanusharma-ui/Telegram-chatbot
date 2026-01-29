@@ -15,3 +15,8 @@ uvicorn[standard]==0.30.6
 
 # Extra (file uploads ke liye)
 python-multipart==0.0.9
+
+cryptography
+google-auth
+google-auth-oauthlib
+google-api-python-client
