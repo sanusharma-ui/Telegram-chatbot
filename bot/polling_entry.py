@@ -81,18 +81,6 @@ def build_persona_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
-# small helper: find persona key case-insensitively
-def find_persona_key_by_name(name: str) -> str:
-    """Return the persona key matching `name` (case-insensitive). If not found, return original name."""
-    if name in PERSONAS:
-        return name
-    lower = name.lower()
-    for k in PERSONAS.keys():
-        if k.lower() == lower:
-            return k
-    return name
-
-
 # ────────────────────────────────────────────────
 #                  MESSAGE HANDLER
 # ────────────────────────────────────────────────
@@ -105,34 +93,45 @@ async def handle_all(message: Message):
     user_id = str(message.from_user.id)
     chat_id = message.chat.id
 
+    # ── START COMMAND ───────────────────────────────
+    if user_text.startswith("/start"):
+        await message.reply(
+            "👋 Bot ready.\n\n"
+            "Commands:\n"
+            "/persona – choose persona\n"
+            "/gmail – gmail tools\n\n"
+            "Type anything to chat."
+        )
+        return
+
     # ── Persona selection ───────────────────────────────
     # Normalize persona command: support "/persona", "/persona@BotName", and "/persona <name>"
-    if user_text.lower().startswith("/persona"):
+    if user_text.startswith("/persona"):
+        # if exactly "/persona" or "/persona@BotName"
         # split by whitespace first; then strip any bot-mention suffix from command token
         tokens = user_text.split()
         first = tokens[0]  # e.g. "/persona" or "/persona@MyBot"
-        cmd_token = first.split("@", 1)[0].lower()  # removes @BotName if present and lowercase
+        cmd_token = first.split("@", 1)[0]  # removes @BotName if present
 
         if cmd_token == "/persona" and len(tokens) == 1:
-            # show menu
+            # show menu (Telegram-safe plain text)
             kb = build_persona_keyboard()
-            await message.reply("🎭 *Choose your persona:*", reply_markup=kb, parse_mode="Markdown")
+            await message.reply("🎭 Choose your persona:", reply_markup=kb)
             return
 
         # legacy or direct: "/persona NAME" or "/persona@BotName NAME"
         if cmd_token == "/persona" and len(tokens) >= 2:
-            persona_raw = tokens[1].strip()
-            persona_key = find_persona_key_by_name(persona_raw)
-            if persona_key in PERSONAS:
-                set_user_persona(user_id, persona_key)
-                await message.reply(f"✅ Switched to *{PERSONAS[persona_key]['name']}* 🔥", parse_mode="Markdown")
+            persona = tokens[1].strip()
+            if persona in PERSONAS:
+                set_user_persona(user_id, persona)
+                await message.reply(f"✅ Switched to *{PERSONAS[persona]['name']}* 🔥", parse_mode="Markdown")
                 return
             else:
                 await message.reply("Unknown persona. Use /persona to open the selector or /persona <name> to switch.")
                 return
 
     # ── Gmail commands ──────────────────────────────────
-    if user_text.startswith(("/gmail", "/help", "/start")):
+    if user_text.startswith(("/gmail", "/help")):
         # robust split: allow multiple words, support subcommands (e.g. /gmail inbox smart)
         tokens = user_text.strip().split()
         cmd = tokens[1].lower() if len(tokens) > 1 else ""
@@ -161,7 +160,6 @@ async def handle_all(message: Message):
 
         # inbox smart (subcommand)
         if cmd == "inbox" and subcmd == "smart":
-            logger.info("SMART INBOX requested by user=%s", user_id)
             try:
                 summary = gmail_smart_summary(user_id)
                 await message.reply(summary or "No recent emails or not connected.")
