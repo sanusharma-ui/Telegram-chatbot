@@ -19,7 +19,7 @@ load_dotenv()
 
 logger = logging.getLogger(__name__)
 
-# env
+# env vars
 CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID")
 CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET")
 OAUTH_REDIRECT = os.getenv("OAUTH_REDIRECT_URI")
@@ -32,7 +32,7 @@ SCOPES_DRAFT = [
     "https://www.googleapis.com/auth/gmail.send",
 ]
 
-# storage
+# storage setup
 use_redis = False
 try:
     import redis
@@ -43,7 +43,6 @@ try:
 except Exception:
     r = None
 
-# encryption
 fernet = Fernet(TOKEN_KEY.encode()) if TOKEN_KEY else None
 
 def _encrypt(obj: Dict) -> bytes:
@@ -99,10 +98,17 @@ def build_flow(state: Optional[str] = None, scopes=SCOPES_READ):
             "client_secret": CLIENT_SECRET,
             "auth_uri": "https://accounts.google.com/o/oauth2/auth",
             "token_uri": "https://oauth2.googleapis.com/token",
-            "redirect_uris": [OAUTH_REDIRECT],  # Library isse automatically use karegi
+            # redirect_uris list ko empty rakho ya remove kar do to avoid duplicate
+            "redirect_uris": [],
         }
     }
-    flow = Flow.from_client_config(client_config, scopes=scopes, state=state)
+    # redirect_uri ko Flow creation mein explicit pass karo
+    flow = Flow.from_client_config(
+        client_config,
+        scopes=scopes,
+        redirect_uri=OAUTH_REDIRECT,  # yahan daal do – no conflict
+        state=state
+    )
     return flow
 
 def get_auth_url_for_user(user_id: str, need_send: bool = False) -> str:
@@ -111,7 +117,7 @@ def get_auth_url_for_user(user_id: str, need_send: bool = False) -> str:
     auth_url, state = flow.authorization_url(
         access_type="offline",
         prompt="consent"
-        # redirect_uri yahan mat daal – client_config se le lega, duplicate nahi hoga
+        # NO redirect_uri kwarg yahan – already set in Flow
     )
     state_key = f"gmail:state:{state}"
     if use_redis and r:
@@ -144,10 +150,8 @@ def handle_oauth_callback(state: str, code: str) -> Optional[str]:
         logger.warning("State missing or expired")
         return None
 
-    # Flow banao aur redirect_uri explicitly set karo token exchange ke liye
+    # Flow banao aur redirect_uri already set hai (from creation)
     flow = build_flow()
-    flow.redirect_uri = OAUTH_REDIRECT
-
     try:
         flow.fetch_token(code=code)
         creds = flow.credentials
@@ -165,6 +169,7 @@ def handle_oauth_callback(state: str, code: str) -> Optional[str]:
         logger.exception("token exchange failed: %s", e)
         return None
 
+# Baaki functions same ( _get_gmail_service_for_user, gmail_summary, create_draft, send_message_from_draft, disconnect_user )
 def _get_gmail_service_for_user(user_id: str) -> Optional[object]:
     tok = load_tokens_for_user(user_id)
     if not tok:
