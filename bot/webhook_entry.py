@@ -103,7 +103,7 @@ async def health():
 
 # OAuth callback endpoint for Google to redirect to after consent
 # Example redirect URI: https://your-domain.com/gmail/callback?state=...&code=...
-@app.get("/gmail/callback")
+@app.get("/gmail/oauth2callback")
 async def gmail_callback(state: str = Query(None), code: str = Query(None)):
     try:
         if not state or not code:
