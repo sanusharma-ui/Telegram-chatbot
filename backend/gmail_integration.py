@@ -1,15 +1,20 @@
 # backend/gmail_integration.py
-import os, base64, json, logging
+import os
+import base64
+import json
+import logging
 from typing import Optional, Dict
-from cryptography.fernet import Fernet, InvalidToken
 
+from cryptography.fernet import Fernet, InvalidToken
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import Flow
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 from google.auth.transport.requests import Request
+from email.mime.text import MIMEText
 
 from dotenv import load_dotenv
+
 load_dotenv()
 
 logger = logging.getLogger(__name__)
@@ -87,8 +92,6 @@ def load_tokens_for_user(user_id: str) -> Optional[Dict]:
         logger.exception("load tokens error: %s", e)
         return None
 
-# -------- MERGED PART STARTS HERE --------
-
 def build_flow(state: Optional[str] = None, scopes=SCOPES_READ):
     client_config = {
         "web": {
@@ -96,10 +99,9 @@ def build_flow(state: Optional[str] = None, scopes=SCOPES_READ):
             "client_secret": CLIENT_SECRET,
             "auth_uri": "https://accounts.google.com/o/oauth2/auth",
             "token_uri": "https://oauth2.googleapis.com/token",
-            "redirect_uris": [OAUTH_REDIRECT],
+            "redirect_uris": [OAUTH_REDIRECT],  # Library isse automatically use karegi
         }
     }
-    # IMPORTANT: no redirect_uri here
     flow = Flow.from_client_config(client_config, scopes=scopes, state=state)
     return flow
 
@@ -108,10 +110,9 @@ def get_auth_url_for_user(user_id: str, need_send: bool = False) -> str:
     flow = build_flow(scopes=scopes)
     auth_url, state = flow.authorization_url(
         access_type="offline",
-        prompt="consent",
-        redirect_uri=OAUTH_REDIRECT,  # redirect_uri ONLY here
+        prompt="consent"
+        # redirect_uri yahan mat daal – client_config se le lega, duplicate nahi hoga
     )
-
     state_key = f"gmail:state:{state}"
     if use_redis and r:
         r.set(state_key, user_id, ex=600)
@@ -120,7 +121,6 @@ def get_auth_url_for_user(user_id: str, need_send: bool = False) -> str:
         os.makedirs(path, exist_ok=True)
         with open(os.path.join(path, state), "w") as f:
             f.write(user_id)
-
     return auth_url
 
 def handle_oauth_callback(state: str, code: str) -> Optional[str]:
@@ -144,8 +144,8 @@ def handle_oauth_callback(state: str, code: str) -> Optional[str]:
         logger.warning("State missing or expired")
         return None
 
+    # Flow banao aur redirect_uri explicitly set karo token exchange ke liye
     flow = build_flow()
-    # ensure redirect_uri is set for token exchange
     flow.redirect_uri = OAUTH_REDIRECT
 
     try:
@@ -165,13 +165,10 @@ def handle_oauth_callback(state: str, code: str) -> Optional[str]:
         logger.exception("token exchange failed: %s", e)
         return None
 
-# -------- MERGED PART ENDS HERE --------
-
 def _get_gmail_service_for_user(user_id: str) -> Optional[object]:
     tok = load_tokens_for_user(user_id)
     if not tok:
         return None
-
     creds = Credentials(
         tok.get("token"),
         refresh_token=tok.get("refresh_token"),
@@ -180,7 +177,6 @@ def _get_gmail_service_for_user(user_id: str) -> Optional[object]:
         client_secret=tok.get("client_secret"),
         scopes=tok.get("scopes"),
     )
-
     try:
         if creds.expired and creds.refresh_token:
             creds.refresh(Request())
@@ -194,7 +190,6 @@ def _get_gmail_service_for_user(user_id: str) -> Optional[object]:
             })
     except Exception:
         logger.exception("refresh failed (may still work)")
-
     try:
         service = build("gmail", "v1", credentials=creds)
         return service
@@ -229,8 +224,6 @@ def gmail_summary(user_id: str, max_results: int = 5) -> Optional[str]:
     except HttpError as e:
         logger.exception("gmail list failed: %s", e)
         return None
-
-from email.mime.text import MIMEText
 
 def create_draft(user_id: str, to: str, subject: str, body: str) -> Optional[Dict]:
     svc = _get_gmail_service_for_user(user_id)
