@@ -1,3 +1,4 @@
+
 # # polling_entry.py
 # import os
 # import asyncio
@@ -18,7 +19,7 @@
 # from backend.gmail_integration import (
 #     get_auth_url_for_user,
 #     gmail_summary,
-#     gmail_smart_summary,  # <-- smart inbox hook
+#     gmail_smart_summary,  # smart inbox hook
 #     create_draft,
 #     send_message_from_draft,
 #     disconnect_user
@@ -62,9 +63,15 @@
 #         persona_items = persona_items[:SAFETY_BUTTON_LIMIT - 1]  # leave room for a "More..." button
 
 #     for key, data in persona_items:
+#         # ensure valid shape (defensive)
+#         name = data.get("name") if isinstance(data, dict) else None
+#         if not name:
+#             # skip malformed persona entries
+#             continue
+
 #         row.append(
 #             InlineKeyboardButton(
-#                 text=data["name"],
+#                 text=name,
 #                 callback_data=f"persona:{key}"
 #             )
 #         )
@@ -86,15 +93,21 @@
 # # ────────────────────────────────────────────────
 # @dp.message()
 # async def handle_all(message: Message):
-#     user_text = (message.text or "").strip()
+#     user_text_raw = message.text or ""
+#     user_text = user_text_raw.strip()
 #     if not user_text:
 #         return
 
 #     user_id = str(message.from_user.id)
 #     chat_id = message.chat.id
 
-#     # ── START COMMAND ───────────────────────────────
-#     if user_text.startswith("/start"):
+#     # Normalize first token (handles /command@BotName)
+#     tokens = user_text.split()
+#     first_token = tokens[0] if tokens else ""
+#     base_cmd = first_token.split("@", 1)[0] if first_token else ""
+
+#     # ── START COMMAND (explicit, before other handlers) ───────────────────────────────
+#     if base_cmd == "/start":
 #         await message.reply(
 #             "👋 Bot ready.\n\n"
 #             "Commands:\n"
@@ -104,36 +117,33 @@
 #         )
 #         return
 
-#     # ── Persona selection ───────────────────────────────
-#     # Normalize persona command: support "/persona", "/persona@BotName", and "/persona <name>"
-#     if user_text.startswith("/persona"):
-#         # if exactly "/persona" or "/persona@BotName"
-#         # split by whitespace first; then strip any bot-mention suffix from command token
-#         tokens = user_text.split()
-#         first = tokens[0]  # e.g. "/persona" or "/persona@MyBot"
-#         cmd_token = first.split("@", 1)[0]  # removes @BotName if present
-
-#         if cmd_token == "/persona" and len(tokens) == 1:
-#             # show menu (Telegram-safe plain text)
+#     # ── PERSONA selection ───────────────────────────────────────────────
+#     # Accept: "/persona", "/persona@BotName", "/persona NAME", "/persona@BotName NAME"
+#     if base_cmd == "/persona":
+#         # tokens: first token may be "/persona" or "/persona@BotName"
+#         # if only "/persona"
+#         if len(tokens) == 1:
 #             kb = build_persona_keyboard()
+#             # send plain text (avoid parse_mode + reply_markup issues)
 #             await message.reply("🎭 Choose your persona:", reply_markup=kb)
 #             return
 
-#         # legacy or direct: "/persona NAME" or "/persona@BotName NAME"
-#         if cmd_token == "/persona" and len(tokens) >= 2:
+#         # if "/persona NAME"
+#         if len(tokens) >= 2:
 #             persona = tokens[1].strip()
 #             if persona in PERSONAS:
 #                 set_user_persona(user_id, persona)
+#                 # markdown for single-line reply is fine here (not with keyboard)
 #                 await message.reply(f"✅ Switched to *{PERSONAS[persona]['name']}* 🔥", parse_mode="Markdown")
 #                 return
 #             else:
-#                 await message.reply("Unknown persona. Use /persona to open the selector or /persona <name> to switch.")
+#                 await message.reply("❌ Unknown persona. Use /persona to open the selector or /persona <name> to switch.")
 #                 return
 
-#     # ── Gmail commands ──────────────────────────────────
-#     if user_text.startswith(("/gmail", "/help")):
-#         # robust split: allow multiple words, support subcommands (e.g. /gmail inbox smart)
-#         tokens = user_text.strip().split()
+#     # ── GMAIL / HELP commands (robust to @BotName) ───────────────────────────────
+#     if base_cmd in ("/gmail", "/help"):
+#         # interpret tokens after the command
+#         # tokens[0] = '/gmail' or '/gmail@Bot', tokens[1] = subcommand (if exists)
 #         cmd = tokens[1].lower() if len(tokens) > 1 else ""
 #         subcmd = tokens[2].lower() if len(tokens) > 2 else ""
 
@@ -180,11 +190,10 @@
 
 #         # send <draft_id>
 #         if cmd == "send":
-#             sub = tokens[2] if len(tokens) > 2 else ""
-#             if not sub:
+#             draft_id = tokens[2].strip() if len(tokens) > 2 else ""
+#             if not draft_id:
 #                 await message.reply("Usage: /gmail send <draft_id>")
 #                 return
-#             draft_id = sub.strip()
 #             try:
 #                 ok = send_message_from_draft(user_id, draft_id)
 #                 await message.reply("✅ Sent!" if ok else "❌ Failed to send.")
@@ -196,6 +205,7 @@
 #         # draft <to> | <subject> | <instructions>
 #         if cmd == "draft":
 #             # rebuild payload preserving separators (we expect everything after "draft")
+#             # use partition to preserve content where 'draft' appears (safer than split)
 #             payload = user_text.partition("draft")[2].strip()
 #             if not payload:
 #                 await message.reply("Usage: /gmail draft <to> | <subject> | <instructions>")
@@ -374,6 +384,7 @@ from aiogram.types import (
     InlineKeyboardButton,
     CallbackQuery
 )
+from aiogram.filters import Command
 from dotenv import load_dotenv
 
 from backend.groq_handler import generate_response, set_user_persona
@@ -448,7 +459,29 @@ def build_persona_keyboard() -> InlineKeyboardMarkup:
     if total_buttons > SAFETY_BUTTON_LIMIT:
         buttons.append([InlineKeyboardButton(text="More...", callback_data="persona:more")])
 
+    # Debug print for checking buttons
+    print(f"Total personas: {len(persona_items)}")
+    print(f"Buttons created: {sum(len(row) for row in buttons)}")
+    if buttons:
+        print("First row:", buttons[0])
+    else:
+        print("No buttons were created!")
+
     return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+# ────────────────────────────────────────────────
+#                  START COMMAND HANDLER
+# ────────────────────────────────────────────────
+@dp.message(Command("start"))
+async def cmd_start(message: Message):
+    await message.reply(
+        "👋 Bot ready.\n\n"
+        "Commands:\n"
+        "/persona – choose persona\n"
+        "/gmail – gmail tools\n\n"
+        "Type anything to chat."
+    )
 
 
 # ────────────────────────────────────────────────
@@ -469,17 +502,6 @@ async def handle_all(message: Message):
     first_token = tokens[0] if tokens else ""
     base_cmd = first_token.split("@", 1)[0] if first_token else ""
 
-    # ── START COMMAND (explicit, before other handlers) ───────────────────────────────
-    if base_cmd == "/start":
-        await message.reply(
-            "👋 Bot ready.\n\n"
-            "Commands:\n"
-            "/persona – choose persona\n"
-            "/gmail – gmail tools\n\n"
-            "Type anything to chat."
-        )
-        return
-
     # ── PERSONA selection ───────────────────────────────────────────────
     # Accept: "/persona", "/persona@BotName", "/persona NAME", "/persona@BotName NAME"
     if base_cmd == "/persona":
@@ -487,8 +509,18 @@ async def handle_all(message: Message):
         # if only "/persona"
         if len(tokens) == 1:
             kb = build_persona_keyboard()
-            # send plain text (avoid parse_mode + reply_markup issues)
-            await message.reply("🎭 Choose your persona:", reply_markup=kb)
+            if not kb.inline_keyboard:
+                await message.reply("No personas available right now 😔")
+                return
+            try:
+                await bot.send_message(
+                    chat_id=chat_id,
+                    text="🎭 Choose your persona:",
+                    reply_markup=kb
+                )
+            except Exception as e:
+                logger.exception("Persona keyboard failed: %s", e)
+                await message.reply("❌ Could not show persona list right now. Try /persona <name> directly.")
             return
 
         # if "/persona NAME"
