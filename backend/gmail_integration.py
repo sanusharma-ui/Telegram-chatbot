@@ -313,9 +313,10 @@ def send_message_from_draft(user_id: str, draft_id: str) -> bool:
     if not svc:
         return False
     try:
-        draft = svc.users().drafts().get(userId="me", id=draft_id).execute()
-        msg = draft["message"]
-        svc.users().messages().send(userId="me", body={"raw": msg["raw"]}).execute()
+        svc.users().drafts().send(
+            userId="me",
+            body={"id": draft_id}
+        ).execute()
         return True
     except Exception as e:
         logger.exception("send draft failed: %s", e)
