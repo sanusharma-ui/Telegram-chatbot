@@ -1,192 +1,3 @@
-# # polling_entry.py
-# import os
-# import asyncio
-# import logging
-# from aiogram import Bot, Dispatcher
-# from aiogram.client.session.aiohttp import AiohttpSession
-# from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
-# from dotenv import load_dotenv
-# from backend.groq_handler import generate_response
-# from interaction.printer import send_human
-# from backend.personas import PERSONAS
-
-# load_dotenv()
-# logging.basicConfig(level=logging.WARNING)
-# logger = logging.getLogger("polling_entry")
-# BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-# if not BOT_TOKEN:
-#     raise SystemExit("BOT_TOKEN missing")
-# session = AiohttpSession()
-# bot = Bot(token=BOT_TOKEN, session=session)
-# dp = Dispatcher()
-
-# @dp.message()
-# async def handle_all(message):
-#     user_text = (message.text or "").strip()
-#     user_id = str(message.from_user.id)
-#     chat_id = message.chat.id
-
-#     if user_text.startswith("/persona"):
-#         parts = user_text.split(maxsplit=1)
-#         if len(parts) == 2:
-#             persona = parts[1].strip()
-#             from backend.personas import PERSONAS
-#             if persona in PERSONAS:
-#                 from backend.groq_handler import set_user_persona
-#                 set_user_persona(user_id, persona)
-#                 await message.reply(
-#                     f"✅ Persona switched to *{PERSONAS[persona]['name']}* 🔥",
-#                     parse_mode="Markdown"
-#                 )
-#                 return
-#         await message.reply("Usage: /persona <name>\nAvailable: " + ", ".join(PERSONAS.keys()))
-#         return
-
-#     if user_text.startswith("/gmail") or user_text.startswith("/help") or user_text.startswith("/start"):
-#         from backend.gmail_integration import (
-#             get_auth_url_for_user,
-#             gmail_summary,
-#             create_draft,
-#             send_message_from_draft,
-#             disconnect_user
-#         )
-
-#         parts = user_text.split(maxsplit=1)
-#         cmd = parts[1].strip() if len(parts) > 1 else ""
-
-#         if cmd == "connect":
-#             try:
-#                 url = get_auth_url_for_user(user_id, need_send=True)
-#                 kb = InlineKeyboardMarkup(inline_keyboard=[
-#                     [InlineKeyboardButton(text="🔐 Connect Gmail", url=url)]
-#                 ])
-#                 await bot.send_message(chat_id, "Click below to securely connect Gmail:", reply_markup=kb, disable_web_page_preview=True)
-#             except Exception as e:
-#                 logger.exception("gmail connect error: %s", e)
-#                 await message.reply("❌ Failed to build OAuth link. Check server logs.")
-#             return
-
-#         if cmd == "inbox":
-#             try:
-#                 summary = gmail_summary(user_id)
-#                 await message.reply(summary or "No recent emails or Gmail not connected.")
-#             except Exception as e:
-#                 logger.exception("gmail inbox error: %s", e)
-#                 await message.reply("❌ Error fetching inbox. Check logs.")
-#             return
-
-#         if cmd == "disconnect":
-#             try:
-#                 disconnect_user(user_id)
-#                 await message.reply("✅ Gmail disconnected safely.")
-#             except Exception as e:
-#                 logger.exception("gmail disconnect error: %s", e)
-#                 await message.reply("❌ Error disconnecting. Check logs.")
-#             return
-
-#         if cmd.startswith("send"):
-#             sub = cmd.split(maxsplit=1)
-#             if len(sub) < 2:
-#                 await message.reply("Usage: /gmail send <draft_id>")
-#                 return
-#             draft_id = sub[1].strip()
-#             try:
-#                 ok = send_message_from_draft(user_id, draft_id)
-#                 await message.reply("✅ Mail sent." if ok else "❌ Failed to send draft. Check logs.")
-#             except Exception as e:
-#                 logger.exception("gmail send error: %s", e)
-#                 await message.reply("❌ Error sending draft. Check logs.")
-#             return
-
-#         if cmd.startswith("draft"):
-#             payload = cmd[len("draft"):].strip()
-#             if not payload:
-#                 await message.reply("Usage: /gmail draft <to> | <subject> | <instructions>")
-#                 return
-#             try:
-#                 parts = [p.strip() for p in payload.split("|")]
-#                 to_addr = parts[0] if len(parts) >= 1 else None
-#                 subject = parts[1] if len(parts) >= 2 else "(no subject)"
-#                 instructions = parts[2] if len(parts) >= 3 else "Please draft a short professional email."
-#                 if not to_addr or "@" not in to_addr:
-#                     await message.reply("Please provide a valid recipient email (e.g. hr@company.com).")
-#                     return
-
-#                 ai_prompt = (
-#                     f"GENERATE_EMAIL_BODY_ONLY:\n"
-#                     f"Recipient: {to_addr}\nSubject: {subject}\nContext/Instruction: {instructions}\n\n"
-#                     "Output: Provide only the email body as plain text. Do not include emojis, greetings beyond a one-line salutation if needed, or any signature."
-#                 )
-
-#                 email_body = await asyncio.to_thread(
-#                     generate_response,
-#                     user_message=ai_prompt,
-#                     persona_key=user_id,
-#                     user_ip=user_id
-#                 )
-
-#                 email_body = (email_body or "").strip()
-#                 email_body = email_body.replace("😎", "").replace("☕", "").strip()
-#                 if not email_body:
-#                     await message.reply("❌ AI failed to generate the email body. Try rewording the instructions.")
-#                     return
-
-#                 created = create_draft(user_id, to_addr, subject, email_body)
-#                 if created and isinstance(created, dict) and created.get("id"):
-#                     draft_id = created.get("id")
-#                     reply_text = (
-#                         "✅ Draft created.\n\n"
-#                         f"To: {to_addr}\nSubject: {subject}\n\n"
-#                         f"---\n{email_body[:1000]}\n---\n\n"
-#                         f"Use `/gmail send {draft_id}` to send this draft, or `/gmail disconnect` to revoke access."
-#                     )
-#                     await message.reply(reply_text)
-#                 else:
-#                     await message.reply("❌ Failed to create draft. Check server logs.")
-#             except Exception as e:
-#                 logger.exception("gmail draft error: %s", e)
-#                 await message.reply("❌ Error while creating draft. Check logs.")
-#             return
-
-#         await message.reply(
-#             "Gmail commands:\n"
-#             "/gmail connect\n"
-#             "/gmail inbox\n"
-#             "/gmail draft to@example.com | Subject | Instructions\n"
-#             "/gmail send <draft_id>\n"
-#             "/gmail disconnect"
-#         )
-#         return
-
-#     async def bg():
-#         try:
-#             ack = await message.reply("Processing... ⏳")
-#             reply = await asyncio.to_thread(generate_response,
-#                 user_message=user_text,
-#                 persona_key=user_id,
-#                 user_ip=user_id
-#             )
-#         except Exception as e:
-#             reply = "Error generating response."
-#             logger.exception("bg generate error: %s", e)
-#         try:
-#             try:
-#                 await bot.delete_message(chat_id, ack.message_id)
-#             except:
-#                 pass
-#             await send_human(bot, chat_id, reply)
-#         except Exception:
-#             await send_human(bot, chat_id, reply)
-
-#     asyncio.create_task(bg())
-
-# async def main():
-#     await dp.start_polling(bot)
-
-# if __name__ == "__main__":
-#     asyncio.run(main())
-
-
 # polling_entry.py
 import os
 import asyncio
@@ -207,7 +18,7 @@ from backend.personas import PERSONAS
 from backend.gmail_integration import (
     get_auth_url_for_user,
     gmail_summary,
-    gmail_smart_summary,  # <-- new: smart inbox hook
+    gmail_smart_summary,  # <-- smart inbox hook
     create_draft,
     send_message_from_draft,
     disconnect_user
@@ -243,7 +54,11 @@ def build_persona_keyboard() -> InlineKeyboardMarkup:
     total_buttons = len(persona_items)
 
     if total_buttons > SAFETY_BUTTON_LIMIT:
-        logger.warning("Too many personas (%d) — trimming keyboard to %d buttons.", total_buttons, SAFETY_BUTTON_LIMIT)
+        logger.warning(
+            "Too many personas (%d) — trimming keyboard to %d buttons.",
+            total_buttons,
+            SAFETY_BUTTON_LIMIT
+        )
         persona_items = persona_items[:SAFETY_BUTTON_LIMIT - 1]  # leave room for a "More..." button
 
     for key, data in persona_items:
@@ -266,6 +81,18 @@ def build_persona_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
+# small helper: find persona key case-insensitively
+def find_persona_key_by_name(name: str) -> str:
+    """Return the persona key matching `name` (case-insensitive). If not found, return original name."""
+    if name in PERSONAS:
+        return name
+    lower = name.lower()
+    for k in PERSONAS.keys():
+        if k.lower() == lower:
+            return k
+    return name
+
+
 # ────────────────────────────────────────────────
 #                  MESSAGE HANDLER
 # ────────────────────────────────────────────────
@@ -279,53 +106,51 @@ async def handle_all(message: Message):
     chat_id = message.chat.id
 
     # ── Persona selection ───────────────────────────────
-    if user_text == "/persona":
-        kb = build_persona_keyboard()
-        await message.reply(
-            "🎭 *Choose your persona:*",
-            reply_markup=kb,
-            parse_mode="Markdown"
-        )
-        return
+    # Normalize persona command: support "/persona", "/persona@BotName", and "/persona <name>"
+    if user_text.lower().startswith("/persona"):
+        # split by whitespace first; then strip any bot-mention suffix from command token
+        tokens = user_text.split()
+        first = tokens[0]  # e.g. "/persona" or "/persona@MyBot"
+        cmd_token = first.split("@", 1)[0].lower()  # removes @BotName if present and lowercase
 
-    if user_text.startswith("/persona "):
-        # legacy text command support (optional)
-        parts = user_text.split(maxsplit=1)
-        if len(parts) == 2:
-            persona = parts[1].strip()
-            if persona in PERSONAS:
-                set_user_persona(user_id, persona)
-                await message.reply(
-                    f"✅ Switched to *{PERSONAS[persona]['name']}* 🔥",
-                    parse_mode="Markdown"
-                )
+        if cmd_token == "/persona" and len(tokens) == 1:
+            # show menu
+            kb = build_persona_keyboard()
+            await message.reply("🎭 *Choose your persona:*", reply_markup=kb, parse_mode="Markdown")
+            return
+
+        # legacy or direct: "/persona NAME" or "/persona@BotName NAME"
+        if cmd_token == "/persona" and len(tokens) >= 2:
+            persona_raw = tokens[1].strip()
+            persona_key = find_persona_key_by_name(persona_raw)
+            if persona_key in PERSONAS:
+                set_user_persona(user_id, persona_key)
+                await message.reply(f"✅ Switched to *{PERSONAS[persona_key]['name']}* 🔥", parse_mode="Markdown")
                 return
-        await message.reply("Use /persona to see the menu or /persona <name>")
-        return
+            else:
+                await message.reply("Unknown persona. Use /persona to open the selector or /persona <name> to switch.")
+                return
 
     # ── Gmail commands ──────────────────────────────────
     if user_text.startswith(("/gmail", "/help", "/start")):
-        parts = user_text.split(maxsplit=1)
-        cmd = parts[1].strip() if len(parts) > 1 else ""
+        # robust split: allow multiple words, support subcommands (e.g. /gmail inbox smart)
+        tokens = user_text.strip().split()
+        cmd = tokens[1].lower() if len(tokens) > 1 else ""
+        subcmd = tokens[2].lower() if len(tokens) > 2 else ""
 
+        # connect
         if cmd == "connect":
             try:
                 url = get_auth_url_for_user(user_id, need_send=True)
-                kb = InlineKeyboardMarkup(inline_keyboard=[[
-                    InlineKeyboardButton(text="🔐 Connect Gmail", url=url)
-                ]])
-                await bot.send_message(
-                    chat_id,
-                    "Click below to securely connect Gmail:",
-                    reply_markup=kb,
-                    disable_web_page_preview=True
-                )
+                kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🔐 Connect Gmail", url=url)]])
+                await bot.send_message(chat_id, "Click below to securely connect Gmail:", reply_markup=kb, disable_web_page_preview=True)
             except Exception as e:
                 logger.exception("gmail connect error: %s", e)
                 await message.reply("❌ Failed to build OAuth link.")
             return
 
-        if cmd == "inbox":
+        # inbox (plain)
+        if cmd == "inbox" and subcmd == "":
             try:
                 summary = gmail_summary(user_id)
                 await message.reply(summary or "No recent emails or not connected.")
@@ -334,8 +159,9 @@ async def handle_all(message: Message):
                 await message.reply("❌ Error fetching inbox.")
             return
 
-        # new smart inbox shortcut
-        if cmd == "inbox smart":
+        # inbox smart (subcommand)
+        if cmd == "inbox" and subcmd == "smart":
+            logger.info("SMART INBOX requested by user=%s", user_id)
             try:
                 summary = gmail_smart_summary(user_id)
                 await message.reply(summary or "No recent emails or not connected.")
@@ -344,6 +170,7 @@ async def handle_all(message: Message):
                 await message.reply("❌ Error fetching smart inbox.")
             return
 
+        # disconnect
         if cmd == "disconnect":
             try:
                 disconnect_user(user_id)
@@ -353,12 +180,13 @@ async def handle_all(message: Message):
                 await message.reply("❌ Error disconnecting.")
             return
 
-        if cmd.startswith("send"):
-            sub = cmd.split(maxsplit=1)
-            if len(sub) < 2:
+        # send <draft_id>
+        if cmd == "send":
+            sub = tokens[2] if len(tokens) > 2 else ""
+            if not sub:
                 await message.reply("Usage: /gmail send <draft_id>")
                 return
-            draft_id = sub[1].strip()
+            draft_id = sub.strip()
             try:
                 ok = send_message_from_draft(user_id, draft_id)
                 await message.reply("✅ Sent!" if ok else "❌ Failed to send.")
@@ -367,21 +195,23 @@ async def handle_all(message: Message):
                 await message.reply("❌ Error sending draft.")
             return
 
-        if cmd.startswith("draft"):
-            payload = cmd[len("draft"):].strip()
+        # draft <to> | <subject> | <instructions>
+        if cmd == "draft":
+            # rebuild payload preserving separators (we expect everything after "draft")
+            payload = user_text.partition("draft")[2].strip()
             if not payload:
                 await message.reply("Usage: /gmail draft <to> | <subject> | <instructions>")
                 return
 
             try:
-                parts = [p.strip() for p in payload.split("|")]
-                if len(parts) < 1 or "@" not in parts[0]:
+                parts_payload = [p.strip() for p in payload.split("|")]
+                if len(parts_payload) < 1 or "@" not in parts_payload[0]:
                     await message.reply("Please provide valid recipient email first.")
                     return
 
-                to_addr = parts[0]
-                subject = parts[1] if len(parts) > 1 else "(no subject)"
-                instructions = parts[2] if len(parts) > 2 else "Short professional email please."
+                to_addr = parts_payload[0]
+                subject = parts_payload[1] if len(parts_payload) > 1 else "(no subject)"
+                instructions = parts_payload[2] if len(parts_payload) > 2 else "Short professional email please."
 
                 ai_prompt = (
                     f"GENERATE_EMAIL_BODY_ONLY:\n"
