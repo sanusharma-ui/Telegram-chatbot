@@ -1,5 +1,5 @@
+# backend/gmail_integration.py  (changes in create_draft for extra validation)
 
-# backend/gmail_integration.py
 import os
 import json
 import logging
@@ -302,6 +302,13 @@ def create_draft(user_id: str, to: str, subject: str, body: str) -> Optional[Dic
     svc = _get_gmail_service_for_user(user_id)
     if not svc:
         return None
+
+    # NEW VALIDATION
+    import re
+    if not re.match(r'^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+$', to.strip()):
+        logger.error(f"Invalid To address attempted: {to}")
+        return None
+
     try:
         message = MIMEText(body, "plain", "utf-8")
         message["to"] = to

@@ -372,7 +372,8 @@
 
 # if __name__ == "__main__":
 #     asyncio.run(main())
-# polling_entry.py
+# polling_entry.py  (changes in /gmail draft handler for validation)
+
 import os
 import asyncio
 import logging
@@ -393,7 +394,7 @@ from backend.personas import PERSONAS
 from backend.gmail_integration import (
     get_auth_url_for_user,
     gmail_summary,
-    gmail_smart_summary,  # smart inbox hook
+    gmail_smart_summary,
     create_draft,
     send_message_from_draft,
     disconnect_user
@@ -408,7 +409,6 @@ BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 if not BOT_TOKEN:
     raise SystemExit("BOT_TOKEN missing")
 
-# Create a single shared aiohttp session and the Bot that uses it
 session = AiohttpSession()
 bot = Bot(token=BOT_TOKEN, session=session)
 dp = Dispatcher()
@@ -417,30 +417,26 @@ dp = Dispatcher()
 #           PERSONA KEYBOARD HELPER
 # ────────────────────────────────────────────────
 PERSONA_COLUMNS = 3
-TELEGRAM_BUTTON_LIMIT = 100  # Telegram absolute limit for inline keyboard buttons
-SAFETY_BUTTON_LIMIT = 90     # keep UX safe; trim if more
+TELEGRAM_BUTTON_LIMIT = 100
+SAFETY_BUTTON_LIMIT = 90
 
 def build_persona_keyboard() -> InlineKeyboardMarkup:
     buttons = []
     row = []
 
-    # convert to list so we can slice if it's huge
     persona_items = list(PERSONAS.items())
     total_buttons = len(persona_items)
 
     if total_buttons > SAFETY_BUTTON_LIMIT:
         logger.warning(
-            "Too many personas (%d) — trimming keyboard to %d buttons.",
-            total_buttons,
-            SAFETY_BUTTON_LIMIT
+            "Too many personas (%d) — trimming to %d buttons.",
+            total_buttons, SAFETY_BUTTON_LIMIT
         )
-        persona_items = persona_items[:SAFETY_BUTTON_LIMIT - 1]  # leave room for a "More..." button
+        persona_items = persona_items[:SAFETY_BUTTON_LIMIT - 1]
 
     for key, data in persona_items:
-        # ensure valid shape (defensive)
         name = data.get("name") if isinstance(data, dict) else None
         if not name:
-            # skip malformed persona entries
             continue
 
         row.append(
@@ -455,23 +451,20 @@ def build_persona_keyboard() -> InlineKeyboardMarkup:
     if row:
         buttons.append(row)
 
-    # if we trimmed earlier, add a "More..." button (fallback/paging placeholder)
     if total_buttons > SAFETY_BUTTON_LIMIT:
         buttons.append([InlineKeyboardButton(text="More...", callback_data="persona:more")])
 
-    # Debug print for checking buttons
-    print(f"Total personas: {len(persona_items)}")
-    print(f"Buttons created: {sum(len(row) for row in buttons)}")
+    # Debug print
+    print(f"[DEBUG] Personas loaded: {len(persona_items)}")
+    print(f"[DEBUG] Buttons rows: {len(buttons)}")
     if buttons:
-        print("First row:", buttons[0])
-    else:
-        print("No buttons were created!")
+        print(f"[DEBUG] First row example: {buttons[0]}")
 
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
 # ────────────────────────────────────────────────
-#                  START COMMAND HANDLER
+#                  START COMMAND
 # ────────────────────────────────────────────────
 @dp.message(Command("start"))
 async def cmd_start(message: Message):
@@ -485,7 +478,7 @@ async def cmd_start(message: Message):
 
 
 # ────────────────────────────────────────────────
-#                  MESSAGE HANDLER
+#                  MAIN MESSAGE HANDLER
 # ────────────────────────────────────────────────
 @dp.message()
 async def handle_all(message: Message):
@@ -503,10 +496,7 @@ async def handle_all(message: Message):
     base_cmd = first_token.split("@", 1)[0] if first_token else ""
 
     # ── PERSONA selection ───────────────────────────────────────────────
-    # Accept: "/persona", "/persona@BotName", "/persona NAME", "/persona@BotName NAME"
     if base_cmd == "/persona":
-        # tokens: first token may be "/persona" or "/persona@BotName"
-        # if only "/persona"
         if len(tokens) == 1:
             kb = build_persona_keyboard()
             if not kb.inline_keyboard:
@@ -523,26 +513,21 @@ async def handle_all(message: Message):
                 await message.reply("❌ Could not show persona list right now. Try /persona <name> directly.")
             return
 
-        # if "/persona NAME"
         if len(tokens) >= 2:
             persona = tokens[1].strip()
             if persona in PERSONAS:
                 set_user_persona(user_id, persona)
-                # markdown for single-line reply is fine here (not with keyboard)
                 await message.reply(f"✅ Switched to *{PERSONAS[persona]['name']}* 🔥", parse_mode="Markdown")
                 return
             else:
                 await message.reply("❌ Unknown persona. Use /persona to open the selector or /persona <name> to switch.")
                 return
 
-    # ── GMAIL / HELP commands (robust to @BotName) ───────────────────────────────
+    # ── GMAIL / HELP commands ───────────────────────────────
     if base_cmd in ("/gmail", "/help"):
-        # interpret tokens after the command
-        # tokens[0] = '/gmail' or '/gmail@Bot', tokens[1] = subcommand (if exists)
         cmd = tokens[1].lower() if len(tokens) > 1 else ""
         subcmd = tokens[2].lower() if len(tokens) > 2 else ""
 
-        # connect
         if cmd == "connect":
             try:
                 url = get_auth_url_for_user(user_id, need_send=True)
@@ -553,7 +538,6 @@ async def handle_all(message: Message):
                 await message.reply("❌ Failed to build OAuth link.")
             return
 
-        # inbox (plain)
         if cmd == "inbox" and subcmd == "":
             try:
                 summary = gmail_summary(user_id)
@@ -563,7 +547,6 @@ async def handle_all(message: Message):
                 await message.reply("❌ Error fetching inbox.")
             return
 
-        # inbox smart (subcommand)
         if cmd == "inbox" and subcmd == "smart":
             try:
                 summary = gmail_smart_summary(user_id)
@@ -573,7 +556,6 @@ async def handle_all(message: Message):
                 await message.reply("❌ Error fetching smart inbox.")
             return
 
-        # disconnect
         if cmd == "disconnect":
             try:
                 disconnect_user(user_id)
@@ -583,7 +565,6 @@ async def handle_all(message: Message):
                 await message.reply("❌ Error disconnecting.")
             return
 
-        # send <draft_id>
         if cmd == "send":
             draft_id = tokens[2].strip() if len(tokens) > 2 else ""
             if not draft_id:
@@ -597,24 +578,29 @@ async def handle_all(message: Message):
                 await message.reply("❌ Error sending draft.")
             return
 
-        # draft <to> | <subject> | <instructions>
+        # ── Draft command with fixes ───────────────────────────────
         if cmd == "draft":
-            # rebuild payload preserving separators (we expect everything after "draft")
-            # use partition to preserve content where 'draft' appears (safer than split)
             payload = user_text.partition("draft")[2].strip()
             if not payload:
-                await message.reply("Usage: /gmail draft <to> | <subject> | <instructions>")
+                await message.reply("Usage: /gmail draft <to> | <subject> | <instructions>\nExample: /gmail draft friend@gmail.com | Meeting Reminder | Professional reminder for tomorrow's call")
                 return
 
             try:
-                parts_payload = [p.strip() for p in payload.split("|")]
-                if len(parts_payload) < 1 or "@" not in parts_payload[0]:
-                    await message.reply("Please provide valid recipient email first.")
+                parts = [p.strip() for p in payload.split("|")]
+                if len(parts) < 1:
+                    await message.reply("❌ At least provide recipient email.")
                     return
 
-                to_addr = parts_payload[0]
-                subject = parts_payload[1] if len(parts_payload) > 1 else "(no subject)"
-                instructions = parts_payload[2] if len(parts_payload) > 2 else "Short professional email please."
+                to_addr = parts[0].strip()
+                
+                # NEW VALIDATION
+                import re
+                if not re.match(r'^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+$', to_addr):
+                    await message.reply(f"❌ Invalid email address: '{to_addr}'\nPlease use a valid format like name@example.com")
+                    return
+
+                subject = parts[1].strip() if len(parts) > 1 else "(no subject)"
+                instructions = parts[2].strip() if len(parts) > 2 else "Short professional email please."
 
                 ai_prompt = (
                     f"GENERATE_EMAIL_BODY_ONLY:\n"
@@ -650,13 +636,13 @@ async def handle_all(message: Message):
                     )
                     await message.reply(reply_text, parse_mode="Markdown")
                 else:
-                    await message.reply("❌ Failed to create draft.")
+                    await message.reply("❌ Failed to create draft. Check if Gmail is connected properly.")
             except Exception as e:
                 logger.exception("gmail draft error: %s", e)
-                await message.reply("❌ Error creating draft.")
+                await message.reply(f"❌ Error creating draft: {str(e)}")
             return
 
-        # help / default gmail message
+        # help / default
         await message.reply(
             "📧 *Gmail commands:*\n\n"
             "/gmail connect       → link your Gmail\n"
@@ -672,13 +658,7 @@ async def handle_all(message: Message):
     # ── Normal conversation ─────────────────────────────
     async def bg_task():
         try:
-            # Better UX: use Telegram "typing" action instead of a temporary message
-            try:
-                await bot.send_chat_action(chat_id, "typing")
-            except Exception:
-                # non-fatal; continue
-                pass
-
+            await bot.send_chat_action(chat_id, "typing")
             reply_text = await asyncio.to_thread(
                 generate_response,
                 user_message=user_text,
@@ -690,7 +670,6 @@ async def handle_all(message: Message):
             logger.exception("background generate failed", exc_info=True)
             await send_human(bot, chat_id, "Sorry, something broke on my side... 😔")
 
-    # schedule background generation (keeps handler fast)
     asyncio.create_task(bg_task())
 
 
@@ -703,7 +682,6 @@ async def persona_callback(callback: CallbackQuery):
         persona_key = callback.data.split(":", 1)[1]
         user_id = str(callback.from_user.id)
 
-        # simple paging fallback
         if persona_key == "more":
             await callback.answer()
             await callback.message.reply("There are many personas — I'll add paging/filters soon. Use /persona <name> for now.")
@@ -711,21 +689,16 @@ async def persona_callback(callback: CallbackQuery):
 
         if persona_key in PERSONAS:
             set_user_persona(user_id, persona_key)
-            # safer edit_text with fallback
             try:
                 await callback.message.edit_text(
                     f"✅ Now talking with *{PERSONAS[persona_key]['name']}* 🔥",
                     parse_mode="Markdown"
                 )
             except Exception:
-                try:
-                    await callback.message.reply(
-                        f"✅ Now talking with *{PERSONAS[persona_key]['name']}* 🔥",
-                        parse_mode="Markdown"
-                    )
-                except Exception:
-                    # last resort: log and ignore
-                    logger.exception("Couldn't notify user about persona change.")
+                await callback.message.reply(
+                    f"✅ Now talking with *{PERSONAS[persona_key]['name']}* 🔥",
+                    parse_mode="Markdown"
+                )
         else:
             try:
                 await callback.message.edit_text("❌ Invalid persona selected.")
@@ -747,16 +720,13 @@ async def persona_callback(callback: CallbackQuery):
 async def main():
     print("🤖 Bot is starting (polling mode)...")
     try:
-        # allowed_updates explicit for safety
         await dp.start_polling(bot, allowed_updates=["message", "callback_query"])
     finally:
-        # ensure the aiohttp session is closed to avoid leaks
         try:
-            # prefer closing bot.session (the same AiohttpSession instance)
             if getattr(bot, "session", None):
                 await bot.session.close()
         except Exception:
-            logger.exception("Error closing bot.session; trying session.close() directly")
+            logger.exception("Error closing bot.session")
 
         try:
             if session:
