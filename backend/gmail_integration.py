@@ -1,10 +1,9 @@
 # backend/gmail_integration.py
 import os
 import json
-import time
-import base64
 import logging
-from typing import Optional, Dict
+import base64
+from typing import Optional, Dict, List
 
 from cryptography.fernet import Fernet, InvalidToken
 
@@ -19,11 +18,12 @@ load_dotenv()
 
 logger = logging.getLogger(__name__)
 
-# ---------- ENV / CONFIG ----------
+# ---------- ENV / CONFIG (with fallback names) ----------
 CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID")
 CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET")
-OAUTH_REDIRECT = os.getenv("OAUTH_REDIRECT_URI")  # must exactly match Google Console redirect
-TOKEN_KEY = os.getenv("TOKEN_ENC_KEY")  # fernet key: use Fernet.generate_key().decode()
+# allow two common env names for redirect URI for compatibility
+OAUTH_REDIRECT = os.getenv("OAUTH_REDIRECT_URI") or os.getenv("GOOGLE_REDIRECT_URI")
+TOKEN_KEY = os.getenv("TOKEN_ENC_KEY")  # fernet key string
 REDIS_URL = os.getenv("REDIS_URL")
 
 # Scopes
@@ -49,10 +49,17 @@ except Exception:
 fernet = None
 if TOKEN_KEY:
     try:
-        fernet = Fernet(TOKEN_KEY.encode() if isinstance(TOKEN_KEY, str) else TOKEN_KEY)
+        # TOKEN_KEY should be a URL-safe base64-encoded 32-byte key (Fernet)
+        if isinstance(TOKEN_KEY, str):
+            key_bytes = TOKEN_KEY.encode()
+        else:
+            key_bytes = TOKEN_KEY
+        fernet = Fernet(key_bytes)
     except Exception as e:
         logger.exception("Invalid TOKEN_ENC_KEY: %s", e)
         fernet = None
+else:
+    logger.warning("TOKEN_ENC_KEY not set; token storage encryption disabled (this will raise on encrypt)")
 
 def _encrypt(obj: Dict) -> bytes:
     raw = json.dumps(obj).encode()
@@ -78,6 +85,7 @@ os.makedirs(TOKENS_DIR, exist_ok=True)
 os.makedirs(STATES_DIR, exist_ok=True)
 
 def store_tokens_for_user(user_id: str, token_obj: Dict):
+    """Encrypt & store tokens (redis or filesystem)."""
     key = f"gmail:tokens:{user_id}"
     enc = _encrypt(token_obj)
     if use_redis and r:
@@ -88,6 +96,7 @@ def store_tokens_for_user(user_id: str, token_obj: Dict):
             f.write(enc)
 
 def load_tokens_for_user(user_id: str) -> Optional[Dict]:
+    """Load and decrypt token object for user."""
     key = f"gmail:tokens:{user_id}"
     try:
         if use_redis and r:
@@ -136,37 +145,71 @@ def _load_state_blob(state: str) -> Optional[Dict]:
             pass
         return payload
 
-# ---------- Flow builder ----------
-def build_flow(state: Optional[str] = None, scopes: Optional[list] = None):
+# ---------- Flow builder (stronger guards + clearer errors) ----------
+def build_flow(state: Optional[str] = None, scopes: Optional[List[str]] = None) -> Flow:
+    """Builds a google_auth_oauthlib Flow with provided scopes."""
     if not CLIENT_ID or not CLIENT_SECRET or not OAUTH_REDIRECT:
-        raise RuntimeError("Missing Google OAuth configuration (CLIENT_ID/CLIENT_SECRET/OAUTH_REDIRECT)")
-    # Use the v2 auth endpoint (recommended)
+        # more explicit message to help debugging environment config
+        raise RuntimeError(
+            "Missing Google OAuth configuration. "
+            f"CLIENT_ID set: {bool(CLIENT_ID)}, "
+            f"CLIENT_SECRET set: {bool(CLIENT_SECRET)}, "
+            f"OAUTH_REDIRECT set: {bool(OAUTH_REDIRECT)} (value: {OAUTH_REDIRECT})"
+        )
+
     client_config = {
         "web": {
             "client_id": CLIENT_ID,
             "client_secret": CLIENT_SECRET,
-            # v2 auth endpoint handled by underlying library; redirect_uris must be correct
             "auth_uri": "https://accounts.google.com/o/oauth2/v2/auth",
             "token_uri": "https://oauth2.googleapis.com/token",
             "redirect_uris": [OAUTH_REDIRECT]
         }
     }
+
     scopes = scopes or SCOPES_READ
-    flow = Flow.from_client_config(client_config, scopes=scopes, redirect_uri=OAUTH_REDIRECT, state=state)
+    flow = Flow.from_client_config(client_config, scopes=scopes, redirect_uri=OAUTH_REDIRECT)
+    # If caller provided a state (rare), attach it so fetch_token can validate it later
+    if state:
+        try:
+            flow.state = state
+        except Exception:
+            # not critical: authorization_url will generate and return a state
+            logger.debug("Could not set flow.state explicitly; letting library generate state")
     return flow
 
 # ---------- Public: get auth url ----------
 def get_auth_url_for_user(user_id: str, need_send: bool = False) -> str:
+    """
+    Builds an OAuth consent URL for a user and stores the state -> (user_id, scopes)
+    If need_send is True, include send/compose scopes.
+    """
     scopes = list(SCOPES_READ) + (SCOPES_DRAFT if need_send else [])
-    # Create flow with scopes explicitly
+    # create flow with explicit scopes
     flow = build_flow(scopes=scopes)
     auth_url, state = flow.authorization_url(access_type="offline", prompt="consent", include_granted_scopes="true")
-    # Save state blob containing user_id and scopes so callback can recreate same flow
+
+    # Save state blob for callback (so we can reconstruct scopes/user)
     _save_state_blob(state, {"user_id": user_id, "scopes": scopes})
+
+    # Helpful debug logging (remove in production)
+    logger.info("Generated Google OAuth URL for user=%s state=%s", user_id, state)
+    logger.debug("OAuth redirect_uri=%s", OAUTH_REDIRECT)
+    logger.debug("OAuth scopes=%s", scopes)
+    logger.debug("OAuth url (truncated)=%s", auth_url[:400])
+
+    # quick sanity: ensure scope= in the url (if missing, something went wrong)
+    if "scope=" not in auth_url:
+        logger.warning("Auth URL missing scope parameter; url=%s", auth_url)
+
     return auth_url
 
 # ---------- Callback handler ----------
 def handle_oauth_callback(state: str, code: str) -> Optional[str]:
+    """
+    Exchange code for tokens and store encrypted tokens for the user.
+    Returns user_id on success, None otherwise.
+    """
     blob = _load_state_blob(state)
     if not blob:
         logger.warning("State missing or expired for state=%s", state)
@@ -187,6 +230,7 @@ def handle_oauth_callback(state: str, code: str) -> Optional[str]:
             "scopes": list(creds.scopes) if creds.scopes else scopes
         }
         store_tokens_for_user(user_id, token_obj)
+        logger.info("Stored tokens for user=%s (scopes=%s)", user_id, token_obj.get("scopes"))
         return user_id
     except Exception as e:
         logger.exception("token exchange failed: %s", e)
@@ -279,10 +323,17 @@ def send_message_from_draft(user_id: str, draft_id: str) -> bool:
         return False
 
 def disconnect_user(user_id: str):
+    """Remove stored tokens for user."""
     key = f"gmail:tokens:{user_id}"
     if use_redis and r:
-        r.delete(key)
+        try:
+            r.delete(key)
+        except Exception:
+            logger.exception("Failed to delete redis token for %s", user_id)
     else:
         path = os.path.join(TOKENS_DIR, f"{user_id}.token")
         if os.path.exists(path):
-            os.remove(path)
+            try:
+                os.remove(path)
+            except Exception:
+                logger.exception("Failed to remove token file for %s", user_id)
