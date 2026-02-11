@@ -1,5 +1,4 @@
 # backend/personas.py
-# Safe import – agar kuch missing hai toh default use kar
 PERSONAS = {
     "default": {
         "name": "Aisha (Default)",
