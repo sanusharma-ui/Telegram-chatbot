@@ -35,7 +35,6 @@ from backend.gmail_drafts import update_draft, delete_draft, get_draft
 from backend.gmail_send_safe import send_safely, send_draft_by_id
 from backend.gmail_threads import fetch_thread, summarize_thread_ai
 from backend.gmail_attachments import list_attachments
-
 load_dotenv()
 
 logging.basicConfig(level=logging.WARNING)
@@ -129,7 +128,7 @@ async def handle_all(message: Message):
     # Normalize first token (handles /command@BotName)
     tokens = user_text.split()
     first_token = tokens[0] if tokens else ""
-    base_cmd = first_token.lstrip("/.!").split("@", 1)[0].lower()
+    base_cmd = first_token.split("@", 1)[0] if first_token else ""
 
     # ── PERSONA selection ───────────────────────────────────────────────
     if base_cmd == "/persona":
@@ -160,23 +159,23 @@ async def handle_all(message: Message):
                 return
 
     # ── GMAIL commands (extended with new modules) ─────────────────────────────
-    if base_cmd in ("gmail", "help"):
+    if base_cmd in ("/gmail", "/help"):
         if len(tokens) < 2:
             await message.reply(
                 "📧 *Gmail Commands (Updated)*\n\n"
-                ".gmail disconnect\n"
-                ".gmail connect\n"
-                ".gmail inbox [smart]\n"
-                ".gmail search <query> → list messages with IDs\n"
-                ".gmail read <message_id> → full email\n"
-                ".gmail thread <thread_id> → AI summary\n"
-                ".gmail mark read|unread|star|archive <id1> <id2>...\n"
-                ".gmail delete <message_id> → **IRREVERSIBLE**\n"
-                ".gmail labels list\n"
-                ".gmail labels create <name>\n"
-                ".gmail labels delete <label_id>\n"
-                ".gmail draft ... (existing)\n"
-                ".gmail send <draft_id>\n",
+                "/gmail connect\n"
+                "/gmail disconnect\n"
+                "/gmail inbox [smart]\n"
+                "/gmail search <query> → list messages with IDs\n"
+                "/gmail read <message_id> → full email\n"
+                "/gmail thread <thread_id> → AI summary\n"
+                "/gmail mark read|unread|star|archive <id1> <id2>...\n"
+                "/gmail delete <message_id> → **IRREVERSIBLE**\n"
+                "/gmail labels list\n"
+                "/gmail labels create <name>\n"
+                "/gmail labels delete <label_id>\n"
+                "/gmail draft ... (existing)\n"
+                "/gmail send <draft_id>\n",
                 parse_mode="Markdown"
             )
             return
@@ -359,7 +358,7 @@ async def handle_all(message: Message):
             except Exception as e:
                 logger.exception("gmail labels error: %s", e)
                 await message.reply("❌ Error with labels command.")
-            return
+                return
 
         # DRAFT (use existing logic you already have for generation & create_draft)
         if cmd == "draft":
