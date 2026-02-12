@@ -129,7 +129,7 @@ async def handle_all(message: Message):
     # Normalize first token (handles /command@BotName)
     tokens = user_text.split()
     first_token = tokens[0] if tokens else ""
-    base_cmd = first_token.split("@", 1)[0].lower() if first_token else ""
+    base_cmd = first_token.lstrip("/.!").split("@", 1)[0].lower()
 
     # ── PERSONA selection ───────────────────────────────────────────────
     if base_cmd == "/persona":
@@ -160,7 +160,7 @@ async def handle_all(message: Message):
                 return
 
     # ── GMAIL commands (extended with new modules) ─────────────────────────────
-    if base_cmd in ("/gmail", ".gmail", "!gmail", "/help", ".help", "!help"):
+    if base_cmd in ("gmail", "help"):
         if len(tokens) < 2:
             await message.reply(
                 "📧 *Gmail Commands (Updated)*\n\n"
