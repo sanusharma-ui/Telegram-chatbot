@@ -129,7 +129,7 @@ async def handle_all(message: Message):
     # Normalize first token (handles /command@BotName)
     tokens = user_text.split()
     first_token = tokens[0] if tokens else ""
-    base_cmd = first_token.split("@", 1)[0] if first_token else ""
+    base_cmd = first_token.split("@", 1)[0].lower() if first_token else ""
 
     # ── PERSONA selection ───────────────────────────────────────────────
     if base_cmd == "/persona":
@@ -160,23 +160,23 @@ async def handle_all(message: Message):
                 return
 
     # ── GMAIL commands (extended with new modules) ─────────────────────────────
-    if base_cmd in ("/gmail", "/help"):
+    if base_cmd in ("/gmail", ".gmail", "!gmail", "/help", ".help", "!help"):
         if len(tokens) < 2:
             await message.reply(
                 "📧 *Gmail Commands (Updated)*\n\n"
-                "/gmail connect\n"
-                "/gmail disconnect\n"
-                "/gmail inbox [smart]\n"
-                "/gmail search <query> → list messages with IDs\n"
-                "/gmail read <message_id> → full email\n"
-                "/gmail thread <thread_id> → AI summary\n"
-                "/gmail mark read|unread|star|archive <id1> <id2>...\n"
-                "/gmail delete <message_id> → **IRREVERSIBLE**\n"
-                "/gmail labels list\n"
-                "/gmail labels create <name>\n"
-                "/gmail labels delete <label_id>\n"
-                "/gmail draft ... (existing)\n"
-                "/gmail send <draft_id>\n",
+                ".gmail disconnect\n"
+                ".gmail connect\n"
+                ".gmail inbox [smart]\n"
+                ".gmail search <query> → list messages with IDs\n"
+                ".gmail read <message_id> → full email\n"
+                ".gmail thread <thread_id> → AI summary\n"
+                ".gmail mark read|unread|star|archive <id1> <id2>...\n"
+                ".gmail delete <message_id> → **IRREVERSIBLE**\n"
+                ".gmail labels list\n"
+                ".gmail labels create <name>\n"
+                ".gmail labels delete <label_id>\n"
+                ".gmail draft ... (existing)\n"
+                ".gmail send <draft_id>\n",
                 parse_mode="Markdown"
             )
             return
