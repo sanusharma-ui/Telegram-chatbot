@@ -91,11 +91,14 @@ async def process_update(update: dict):
                 send_message_from_draft,
                 disconnect_user
             )
+            from backend.gmail_search import search_messages
 
-            parts = user_text.split(maxsplit=1)
-            cmd = parts[1].strip() if len(parts) > 1 else ""
+            tokens = user_text.split()
+            subcmd = tokens[1] if len(tokens) > 1 else ""
+            args = tokens[2:] if len(tokens) > 2 else []
 
-            if cmd == "connect":
+            # /gmail connect
+            if subcmd == "connect":
                 try:
                     url = get_auth_url_for_user(user_id, need_send=True)
                     # send as a single button so Telegram doesn't break the URL
@@ -108,7 +111,8 @@ async def process_update(update: dict):
                     await send_human(bot, chat_id, "❌ Failed to build OAuth link. Check server logs.")
                 return
 
-            if cmd == "inbox":
+            # /gmail inbox
+            if subcmd == "inbox":
                 try:
                     summary = gmail_summary(user_id)
                     await send_human(bot, chat_id, summary or "No recent emails or Gmail not connected.")
@@ -117,31 +121,39 @@ async def process_update(update: dict):
                     await send_human(bot, chat_id, "❌ Error fetching inbox. Check logs.")
                 return
 
-            if cmd == "disconnect":
+            # /gmail search <query>
+            if subcmd == "search":
                 try:
-                    disconnect_user(user_id)
-                    await send_human(bot, chat_id, "✅ Gmail disconnected safely.")
+                    query = " ".join(args) if args else "in:inbox"
+                    results = search_messages(user_id, query)
+                    if not results:
+                        await send_human(bot, chat_id, "No results found.")
+                        return
+                    lines = ["📬 Search results:"]
+                    for m in results:
+                        lines.append(f"- {m.get('id')}")
+                    await send_human(bot, chat_id, "\n".join(lines))
                 except Exception as e:
-                    logger.exception("gmail disconnect error: %s", e)
-                    await send_human(bot, chat_id, "❌ Error disconnecting. Check logs.")
+                    logger.exception("gmail search error: %s", e)
+                    await send_human(bot, chat_id, "❌ Error during search.")
                 return
 
-            if cmd.startswith("send"):
-                sub = cmd.split(maxsplit=1)
-                if len(sub) < 2:
+            # /gmail send <draft_id>
+            if subcmd == "send":
+                if not args:
                     await send_human(bot, chat_id, "Usage: /gmail send <draft_id>")
                     return
-                draft_id = sub[1].strip()
                 try:
-                    ok = send_message_from_draft(user_id, draft_id)
+                    ok = send_message_from_draft(user_id, args[0])
                     await send_human(bot, chat_id, "✅ Mail sent." if ok else "❌ Failed to send draft. Check logs.")
                 except Exception as e:
                     logger.exception("gmail send error: %s", e)
                     await send_human(bot, chat_id, "❌ Error sending draft. Check logs.")
                 return
 
-            if cmd.startswith("draft"):
-                payload = cmd[len("draft"):].strip()
+            # /gmail draft <to> | <subject> | <instructions>
+            if subcmd == "draft":
+                payload = " ".join(args)
                 if not payload:
                     await send_human(bot, chat_id, "Usage: /gmail draft <to> | <subject> | <instructions>")
                     return
@@ -190,11 +202,23 @@ async def process_update(update: dict):
                     await send_human(bot, chat_id, "❌ Error while creating draft. Check logs.")
                 return
 
+            # /gmail disconnect
+            if subcmd == "disconnect":
+                try:
+                    disconnect_user(user_id)
+                    await send_human(bot, chat_id, "✅ Gmail disconnected safely.")
+                except Exception as e:
+                    logger.exception("gmail disconnect error: %s", e)
+                    await send_human(bot, chat_id, "❌ Error disconnecting. Check logs.")
+                return      
+
+            # fallback
             await send_human(bot, chat_id,
                 "Gmail commands:\n"
                 "/gmail connect\n"
                 "/gmail inbox\n"
-                "/gmail draft to@example.com | Subject | Instructions\n"
+                "/gmail search <query>\n"
+                "/gmail draft <to> | <subject> | <instructions>\n"
                 "/gmail send <draft_id>\n"
                 "/gmail disconnect"
             )
