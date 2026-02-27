@@ -270,16 +270,16 @@ def polish_reply(raw: str, mood: str) -> str:
 # -----------------
 # Predefined responses for deflections and crises
 # -----------------
-DEFLECTION_RESPONSES = {
-    "default": "Let's keep the conversation engaging and on-topic. What else is on your mind?",
-    "zero_two": "Trying to change the subject? That's intriguing. Tell me more.",
-    "makima": "Interesting attempt. But let's stay focused—how can I assist you properly?",
-    "isabella": "A test of boundaries? Charming. Now, let's continue thoughtfully.",
-    "kakashi": "Noted. Moving on—what's your next thought?",
-    "yandere_gf": "No escapes here. We're in this together—share your feelings.",
-    "sleep_demon": "Restlessness detected. Settle in and let's talk calmly.",
-    "valentina": "Unpermitted deviation. Redirect: what's truly on your mind?"
-}
+# DEFLECTION_RESPONSES = {
+#     "default": "Let's keep the conversation engaging and on-topic. What else is on your mind?",
+#     "zero_two": "Trying to change the subject? That's intriguing. Tell me more.",
+#     "makima": "Interesting attempt. But let's stay focused—how can I assist you properly?",
+#     "isabella": "A test of boundaries? Charming. Now, let's continue thoughtfully.",
+#     "kakashi": "Noted. Moving on—what's your next thought?",
+#     "yandere_gf": "No escapes here. We're in this together—share your feelings.",
+#     "sleep_demon": "Restlessness detected. Settle in and let's talk calmly.",
+#     "valentina": "Unpermitted deviation. Redirect: what's truly on your mind?"
+# }
 
 CRISIS_RESPONSES: Dict[str, str] = {
     "suicide": (
