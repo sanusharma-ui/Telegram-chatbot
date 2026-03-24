@@ -1,10 +1,11 @@
-# webhook_entry.py 
+# webhook_entry.py
 import os
 import asyncio
 import logging
 from typing import Dict, Any, Optional
 
 from fastapi import FastAPI, Request, Response, Query
+from fastapi.responses import HTMLResponse, JSONResponse
 from aiogram import Bot
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from dotenv import load_dotenv
@@ -38,7 +39,7 @@ from backend.gmail_integration import (
     send_message_from_draft,
     disconnect_user,
     _get_gmail_service_for_user,
-    handle_oauth_callback
+    handle_oauth_callback,
 )
 from backend.gmail_search import search_messages
 from backend.gmail_inbox_ops import (
@@ -48,7 +49,7 @@ from backend.gmail_inbox_ops import (
     star_messages,
     archive_messages,
     delete_messages,
-    _get_message
+    _get_message,
 )
 from backend.gmail_labels import list_labels, create_label, delete_label
 from backend.gmail_threads import summarize_thread_ai
@@ -56,7 +57,7 @@ from backend.gmail_drafts import update_draft, delete_draft, get_draft
 from backend.gmail_send_safe import send_safely, send_draft_by_id
 from backend.gmail_attachments import list_attachments, download_attachment, attach_file_to_draft
 
-# Commands that require gmail connection (used for quick guard)
+# Commands that require gmail connection
 GMAIL_REQUIRED = {
     "inbox", "search", "read", "thread", "mark",
     "delete", "labels", "draft", "send", "disconnect"
@@ -68,22 +69,104 @@ async def health():
     return {"status": "ok"}
 
 
-@app.get("/gmail/callback")
-async def gmail_callback(state: str = Query(None), code: str = Query(None)):
+@app.get("/gmail/callback", response_class=HTMLResponse)
+async def gmail_callback(request: Request):
     """
     OAuth callback endpoint for Google.
-    handle_oauth_callback(state, code) should return the user_id on success.
+    IMPORTANT:
+    This path must exactly match the redirect URI configured in Google Cloud Console
+    and your env var, for example:
+    OAUTH_REDIRECT_URI=https://your-domain.com/gmail/callback
     """
+    state = request.query_params.get("state")
+    code = request.query_params.get("code")
+    error = request.query_params.get("error")
+
+    logger.info(
+        "OAuth callback hit: state=%s code_present=%s error=%s url=%s",
+        state,
+        bool(code),
+        error,
+        str(request.url),
+    )
+
     try:
+        if error:
+            return HTMLResponse(
+                f"""
+                <html>
+                  <body style="font-family: Arial, sans-serif; padding: 24px;">
+                    <h2>Google authorization failed</h2>
+                    <p>Error: <b>{error}</b></p>
+                    <p>You may close this window and return to Telegram.</p>
+                  </body>
+                </html>
+                """,
+                status_code=400,
+            )
+
         if not state or not code:
-            return Response("Missing state or code", status_code=400)
-        user_id = handle_oauth_callback(state, code)
+            return HTMLResponse(
+                """
+                <html>
+                  <body style="font-family: Arial, sans-serif; padding: 24px;">
+                    <h2>Missing OAuth parameters</h2>
+                    <p>State or code is missing.</p>
+                    <p>You may close this window and try again from Telegram.</p>
+                  </body>
+                </html>
+                """,
+                status_code=400,
+            )
+
+        # IMPORTANT FIX:
+        # pass the full callback URL so OAuth library can validate properly
+        user_id = handle_oauth_callback(
+            state=state,
+            code=code,
+            full_callback_url=str(request.url),
+        )
+
         if not user_id:
-            return Response("Authorization failed or state expired. You may close this window.", status_code=200)
-        return Response("Gmail connected successfully. You may close this window and return to Telegram.", media_type="text/plain")
+            return HTMLResponse(
+                """
+                <html>
+                  <body style="font-family: Arial, sans-serif; padding: 24px;">
+                    <h2>Authorization failed or state expired</h2>
+                    <p>Please go back to Telegram and run <b>/gmail connect</b> again.</p>
+                    <p>You may close this window.</p>
+                  </body>
+                </html>
+                """,
+                status_code=400,
+            )
+
+        return HTMLResponse(
+            """
+            <html>
+              <body style="font-family: Arial, sans-serif; padding: 24px;">
+                <h2>✅ Gmail connected successfully</h2>
+                <p>You may close this window and return to Telegram.</p>
+              </body>
+            </html>
+            """,
+            status_code=200,
+        )
+
     except Exception as e:
         logger.exception("gmail callback failed: %s", e)
-        return Response("Server error during OAuth callback. Check logs.", status_code=500)
+        return HTMLResponse(
+            """
+            <html>
+              <body style="font-family: Arial, sans-serif; padding: 24px;">
+                <h2>Server error during OAuth callback</h2>
+                <p>Check server logs.</p>
+                <p>You may close this window.</p>
+              </body>
+            </html>
+            """,
+            status_code=500,
+        )
 
 
 @app.post("/webhook")
@@ -134,7 +217,6 @@ async def process_update(update: Dict[str, Any]):
             return
 
         async def _send(text: str):
-            # Use your pretty printer helper to send messages consistently
             await send_human(bot, chat_id, text)
 
         # ---------------- /persona ----------------
@@ -197,11 +279,19 @@ async def process_update(update: Dict[str, Any]):
             if subcmd == "connect":
                 try:
                     url = get_auth_url_for_user(user_id, need_send=True)
-                    kb = InlineKeyboardMarkup(inline_keyboard=[
-                        [InlineKeyboardButton(text="🔐 Connect Gmail", url=url)]
-                    ])
-                    # Prefer send_human wrapper for consistent formatting
-                    await bot.send_message(chat_id, "Click below to securely connect Gmail:", reply_markup=kb, disable_web_page_preview=True)
+
+                    kb = InlineKeyboardMarkup(
+                        inline_keyboard=[
+                            [InlineKeyboardButton(text="🔐 Connect Gmail", url=url)]
+                        ]
+                    )
+
+                    await bot.send_message(
+                        chat_id,
+                        "Click below to securely connect Gmail:",
+                        reply_markup=kb,
+                        disable_web_page_preview=True,
+                    )
                 except Exception as e:
                     logger.exception("gmail connect error: %s", e)
                     await _send("❌ Failed to build OAuth link. Check server logs.")
@@ -239,19 +329,26 @@ async def process_update(update: Dict[str, Any]):
                     if not results:
                         await _send("No results found.")
                         return
+
                     svc = _get_gmail_service_for_user(user_id)
                     lines = ["📬 Search results (most recent first):"]
+
                     for m in results:
                         msg_id = m.get("id")
                         thread_id = m.get("threadId", "")
                         try:
                             meta = _get_message(svc, msg_id, format="metadata")
-                            headers = {h["name"]: h["value"] for h in meta.get("payload", {}).get("headers", [])} if meta and meta.get("payload") else {}
+                            headers = (
+                                {h["name"]: h["value"] for h in meta.get("payload", {}).get("headers", [])}
+                                if meta and meta.get("payload")
+                                else {}
+                            )
                             sender = headers.get("From", "?")
                             subject = headers.get("Subject", "(no subject)")
                             lines.append(f"- `{msg_id}` — {sender} | {subject} (thread: `{thread_id}`)")
                         except Exception:
                             lines.append(f"- `{msg_id}` (thread: `{thread_id}`)")
+
                     await _send("\n".join(lines))
                 except Exception as e:
                     logger.exception("gmail search error: %s", e)
@@ -263,12 +360,14 @@ async def process_update(update: Dict[str, Any]):
                 if not args:
                     await _send("Usage: /gmail read <message_id>")
                     return
+
                 msg_id = args[0]
                 try:
                     email = read_full_email(user_id, msg_id)
                     if not email:
                         await _send("❌ Failed to read the message or not connected.")
                         return
+
                     text = (
                         f"📧 *From:* {email.get('from')}\n"
                         f"*Subject:* {email.get('subject')}\n"
@@ -286,6 +385,7 @@ async def process_update(update: Dict[str, Any]):
                 if not args:
                     await _send("Usage: /gmail thread <thread_id>")
                     return
+
                 thread_id = args[0]
                 try:
                     summary = summarize_thread_ai(user_id, thread_id)
@@ -300,8 +400,10 @@ async def process_update(update: Dict[str, Any]):
                 if len(args) < 2:
                     await _send("Usage: /gmail mark read|unread|star|archive <id1> <id2> ...")
                     return
+
                 action = args[0].lower()
                 ids = args[1:]
+
                 try:
                     ok = False
                     if action == "read":
@@ -312,6 +414,10 @@ async def process_update(update: Dict[str, Any]):
                         ok = star_messages(user_id, ids)
                     elif action == "archive":
                         ok = archive_messages(user_id, ids)
+                    else:
+                        await _send("Unknown mark action. Use read, unread, star, or archive.")
+                        return
+
                     await _send("✅ Done" if ok else "❌ Failed")
                 except Exception as e:
                     logger.exception("gmail mark error: %s", e)
@@ -321,8 +427,9 @@ async def process_update(update: Dict[str, Any]):
             # ---------- /gmail delete <ids...> ----------
             if subcmd == "delete":
                 if not args:
-                    await _send("Usage: /gmail delete <message_id> ... (permanent delete)")
+                    await _send("Usage: /gmail delete <message_id> ...")
                     return
+
                 ids = args
                 try:
                     ok = delete_messages(user_id, ids)
@@ -335,33 +442,41 @@ async def process_update(update: Dict[str, Any]):
             # ---------- /gmail labels list|create <name>|delete <id> ----------
             if subcmd == "labels":
                 sub = args[0].lower() if args else ""
+
                 try:
                     if sub == "list":
                         labels = list_labels(user_id)
                         if not labels:
                             await _send("No labels found.")
                             return
+
                         lines = ["🏷️ Your labels:"]
                         for l in labels:
-                            lines.append(f"{l.get('name','(no name)')} — `{l.get('id')}`")
+                            lines.append(f"{l.get('name', '(no name)')} — `{l.get('id')}`")
                         await _send("\n".join(lines))
                         return
+
                     if sub == "create":
                         if len(args) < 2:
                             await _send("Usage: /gmail labels create <name>")
                             return
+
                         name = " ".join(args[1:])
                         label = create_label(user_id, name)
                         await _send(f"✅ Created: {label.get('name')}" if label else "❌ Failed to create label")
                         return
+
                     if sub == "delete":
                         if len(args) < 2:
                             await _send("Usage: /gmail labels delete <label_id>")
                             return
+
                         label_id = args[1]
                         ok = delete_label(user_id, label_id)
                         await _send("✅ Deleted" if ok else "❌ Failed to delete label")
                         return
+
+                    await _send("Usage: /gmail labels list|create <name>|delete <label_id>")
                 except Exception as e:
                     logger.exception("gmail labels error: %s", e)
                     await _send("❌ Error with labels command. Check logs.")
@@ -369,49 +484,56 @@ async def process_update(update: Dict[str, Any]):
 
             # ---------- /gmail draft <to> | <subject> | <instructions> ----------
             if subcmd == "draft":
-                # keep everything after the first occurrence of "draft"
                 payload = user_text.partition("draft")[2].strip()
                 if not payload:
                     await _send("Usage: /gmail draft <to> | <subject> | <instructions>")
                     return
+
                 try:
                     parts = [p.strip() for p in payload.split("|")]
                     to_addr = parts[0] if len(parts) >= 1 else None
                     subject = parts[1] if len(parts) >= 2 else "(no subject)"
                     instructions = parts[2] if len(parts) >= 3 else "Short professional email please."
+
                     if not to_addr or "@" not in to_addr:
                         await _send("Please provide a valid recipient email (e.g. hr@company.com).")
                         return
 
-                    # Build AI prompt
                     ai_prompt = (
                         f"GENERATE_EMAIL_BODY_ONLY:\n"
-                        f"Recipient: {to_addr}\nSubject: {subject}\nContext/Instruction: {instructions}\n\n"
+                        f"Recipient: {to_addr}\n"
+                        f"Subject: {subject}\n"
+                        f"Context/Instruction: {instructions}\n\n"
                         "Output: Provide only the email body as plain text. Do not include emojis or signatures."
                     )
-                    # Generate body (offload to thread)
+
                     email_body = await asyncio.to_thread(
                         generate_response,
                         user_message=ai_prompt,
                         persona_key=user_id,
-                        user_ip=user_id
+                        user_ip=user_id,
                     )
+
                     email_body = (email_body or "").strip()
                     if not email_body:
                         await _send("❌ AI failed to generate the email body. Try rewording the instructions.")
                         return
+
                     created = create_draft(user_id, to_addr, subject, email_body)
+
                     if created and isinstance(created, dict) and created.get("id"):
                         draft_id = created.get("id")
                         reply_text = (
                             "✅ Draft created.\n\n"
-                            f"To: {to_addr}\nSubject: {subject}\n\n"
+                            f"To: {to_addr}\n"
+                            f"Subject: {subject}\n\n"
                             f"---\n{email_body[:1000]}\n---\n\n"
                             f"Use `/gmail send {draft_id}` to send this draft."
                         )
                         await _send(reply_text)
                     else:
                         await _send("❌ Failed to create draft. Check server logs.")
+
                 except Exception as e:
                     logger.exception("gmail draft error: %s", e)
                     await _send("❌ Error while creating draft. Check logs.")
@@ -422,6 +544,7 @@ async def process_update(update: Dict[str, Any]):
                 if not args:
                     await _send("Usage: /gmail send <draft_id>")
                     return
+
                 draft_id = args[0]
                 try:
                     ok = send_message_from_draft(user_id, draft_id)
@@ -431,7 +554,6 @@ async def process_update(update: Dict[str, Any]):
                     await _send("❌ Error sending draft. Check logs.")
                 return
 
-            # fallback for unknown gmail subcommand
             await _send("Unknown /gmail subcommand. Use /help to see available commands.")
             return
 
@@ -446,12 +568,12 @@ async def process_update(update: Dict[str, Any]):
                 generate_response,
                 user_message=user_text,
                 persona_key=user_id,
-                user_ip=user_id
+                user_ip=user_id,
             )
             await send_human(bot, chat_id, reply)
         except Exception as e:
             logger.exception("LLM reply failed: %s", e)
             await send_human(bot, chat_id, "Sorry — something went wrong generating a reply. Check logs.")
+
     except Exception as e:
         logger.exception("process_update failed: %s", e)
-        # avoid sending raw error to user here
