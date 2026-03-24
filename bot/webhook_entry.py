@@ -1,4 +1,4 @@
-# webhook_entry.py — final consolidated webhook entry (no external router required)
+# webhook_entry.py 
 import os
 import asyncio
 import logging
