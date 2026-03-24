@@ -6,6 +6,8 @@ import json
 import time
 import base64
 import logging
+import secrets
+import hashlib
 from typing import Optional, Dict, List
 
 from dotenv import load_dotenv
@@ -75,10 +77,12 @@ if TOKEN_KEY:
 else:
     logger.warning("TOKEN_ENC_KEY not set")
 
+
 def _encrypt(obj: Dict) -> bytes:
     if not fernet:
         raise RuntimeError("Encryption key missing or invalid")
     return fernet.encrypt(json.dumps(obj).encode("utf-8"))
+
 
 def _decrypt(token_bytes: bytes) -> Dict:
     if not fernet:
@@ -89,6 +93,7 @@ def _decrypt(token_bytes: bytes) -> Dict:
     except InvalidToken:
         logger.exception("Invalid encrypted token data")
         return {}
+
 
 # ─────────────────────────────────────────────
 # FILESYSTEM PATHS
@@ -115,6 +120,7 @@ def store_tokens_for_user(user_id: str, token_obj: Dict) -> None:
     with open(path, "wb") as f:
         f.write(enc)
 
+
 def load_tokens_for_user(user_id: str) -> Optional[Dict]:
     key = f"gmail:tokens:{user_id}"
 
@@ -137,6 +143,7 @@ def load_tokens_for_user(user_id: str) -> Optional[Dict]:
         logger.exception("load_tokens_for_user failed: %s", e)
         return None
 
+
 def disconnect_user(user_id: str) -> None:
     key = f"gmail:tokens:{user_id}"
 
@@ -154,6 +161,7 @@ def disconnect_user(user_id: str) -> None:
         except Exception:
             logger.exception("Failed deleting token file for user=%s", user_id)
 
+
 # ─────────────────────────────────────────────
 # OAUTH STATE STORAGE
 # ─────────────────────────────────────────────
@@ -167,13 +175,14 @@ def _save_state_blob(state: str, payload: Dict) -> None:
         r.set(
             f"gmail:state:{state}",
             json.dumps(wrapped).encode("utf-8"),
-            ex=STATE_TTL_SECONDS
+            ex=STATE_TTL_SECONDS,
         )
         return
 
     path = os.path.join(STATES_DIR, state)
     with open(path, "w", encoding="utf-8") as f:
         json.dump(wrapped, f)
+
 
 def _load_state_blob(state: str) -> Optional[Dict]:
     now = int(time.time())
@@ -215,6 +224,17 @@ def _load_state_blob(state: str) -> Optional[Dict]:
 
     return wrapped.get("payload")
 
+
+# ─────────────────────────────────────────────
+# PKCE HELPERS
+# ─────────────────────────────────────────────
+def _generate_pkce_pair():
+    code_verifier = secrets.token_urlsafe(64)
+    digest = hashlib.sha256(code_verifier.encode("utf-8")).digest()
+    code_challenge = base64.urlsafe_b64encode(digest).rstrip(b"=").decode("utf-8")
+    return code_verifier, code_challenge
+
+
 # ─────────────────────────────────────────────
 # FLOW BUILDER
 # ─────────────────────────────────────────────
@@ -248,6 +268,7 @@ def build_flow(
     )
     return flow
 
+
 # ─────────────────────────────────────────────
 # PUBLIC: GET AUTH URL
 # ─────────────────────────────────────────────
@@ -258,24 +279,31 @@ def get_auth_url_for_user(user_id: str, need_send: bool = False) -> str:
 
     flow = build_flow(scopes=scopes)
 
+    code_verifier, code_challenge = _generate_pkce_pair()
+    flow.code_verifier = code_verifier
+
     auth_url, state = flow.authorization_url(
         access_type="offline",
         prompt="consent",
         include_granted_scopes="true",
+        code_challenge=code_challenge,
+        code_challenge_method="S256",
     )
 
     _save_state_blob(state, {
         "user_id": user_id,
         "scopes": scopes,
+        "code_verifier": code_verifier,
     })
 
     logger.info(
-        "Generated Gmail OAuth URL user=%s state=%s redirect=%s",
+        "Generated Gmail OAuth URL user=%s state=%s redirect=%s pkce=True",
         user_id,
         state,
         OAUTH_REDIRECT,
     )
     return auth_url
+
 
 # ─────────────────────────────────────────────
 # PUBLIC: HANDLE OAUTH CALLBACK
@@ -292,14 +320,24 @@ def handle_oauth_callback(
 
     user_id = blob.get("user_id")
     scopes = blob.get("scopes", SCOPES_READ)
+    code_verifier = blob.get("code_verifier")
 
     try:
         flow = build_flow(state=state, scopes=scopes)
 
+        if code_verifier:
+            flow.code_verifier = code_verifier
+
         if full_callback_url:
-            flow.fetch_token(authorization_response=full_callback_url)
+            flow.fetch_token(
+                authorization_response=full_callback_url,
+                code_verifier=code_verifier,
+            )
         else:
-            flow.fetch_token(code=code)
+            flow.fetch_token(
+                code=code,
+                code_verifier=code_verifier,
+            )
 
         creds = flow.credentials
         token_obj = {
@@ -318,6 +356,7 @@ def handle_oauth_callback(
     except Exception as e:
         logger.exception("handle_oauth_callback failed: %s", e)
         return None
+
 
 # ─────────────────────────────────────────────
 # GMAIL SERVICE HELPER
@@ -356,6 +395,7 @@ def _get_gmail_service_for_user(user_id: str):
         logger.exception("Failed to build Gmail service")
         return None
 
+
 # ─────────────────────────────────────────────
 # HELPERS
 # ─────────────────────────────────────────────
@@ -369,6 +409,7 @@ def classify_email(subject: str, sender: str) -> str:
     if any(x in text for x in ["otp", "verification", "code"]):
         return "🔐 OTP"
     return "👤 Personal"
+
 
 def gmail_summary(user_id: str, max_results: int = 5) -> Optional[str]:
     svc = _get_gmail_service_for_user(user_id)
@@ -410,6 +451,7 @@ def gmail_summary(user_id: str, max_results: int = 5) -> Optional[str]:
     except HttpError as e:
         logger.exception("gmail_summary failed: %s", e)
         return None
+
 
 def gmail_smart_summary(user_id: str, max_results: int = 10) -> Optional[str]:
     svc = _get_gmail_service_for_user(user_id)
@@ -453,6 +495,7 @@ def gmail_smart_summary(user_id: str, max_results: int = 10) -> Optional[str]:
         logger.exception("gmail_smart_summary failed: %s", e)
         return None
 
+
 # ─────────────────────────────────────────────
 # DRAFT / SEND HELPERS
 # ─────────────────────────────────────────────
@@ -487,6 +530,7 @@ def create_draft(
     except HttpError as e:
         logger.exception("create_draft failed: %s", e)
         return None
+
 
 def send_message_from_draft(user_id: str, draft_id: str) -> bool:
     svc = _get_gmail_service_for_user(user_id)
