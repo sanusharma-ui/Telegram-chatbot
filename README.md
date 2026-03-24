@@ -171,3 +171,4 @@ MIT — feel free to fork and adapt for personal or internal use. If you republi
 If you want help improving the repo layout, persona prompts, safety rules, or Gmail UX, open an issue or DM the repo owner.
 
 Made with ❤️ for meaningful, safe AI companionship.
+⭐ If you find this project useful, please consider giving it a star!
