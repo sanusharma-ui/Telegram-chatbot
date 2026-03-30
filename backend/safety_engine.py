@@ -8,9 +8,8 @@ from collections import defaultdict, deque
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# -----------------
+
 # Mood detection
-# -----------------
 POSITIVE_WORDS = [
     "good", "great", "awesome", "happy", "cool",
     "fine", "love", "amazing"
@@ -33,10 +32,9 @@ def detect_mood(text: str) -> str:
     return "neutral"
 
 
-# -----------------
 # Fast prefilter for harmful content
 # FIX: Added "suicidal ideation" alongside "suicide ideation" to catch common variant
-# -----------------
+
 FAST_BAN_WORDS = {
     # Self-harm: Intent-focused patterns, avoiding educational contexts
     "suicide ideation", "suicidal ideation", "self harm plan", "kill myself now",
@@ -55,9 +53,9 @@ def fast_harm_check(text: str) -> bool:
     return any(w in t for w in FAST_BAN_WORDS)
 
 
-# -----------------
+
 # Regular expression patterns for harm detection
-# -----------------
+
 SELF_HARM_PATTERNS = [
     # FIX: Added 'myself' and broader phrasing — original missed "kill myself", "die alone" etc.
     r"(want|plan|going\s+to|trying\s+to)\s+(kill|die|end\s+it|hurt)\s+(my)?self",
@@ -110,10 +108,7 @@ _COMPILED = {
 }
 
 
-# -----------------
-# Rate Limiter — NEW
-# Tracks harmful message attempts per user to detect escalation patterns
-# -----------------
+
 class RateLimiter:
     """
     Sliding-window rate limiter for harmful content detection.
@@ -150,11 +145,6 @@ class RateLimiter:
 
 # Global rate limiter instance (3 harmful hits within 5 minutes = escalate)
 harm_rate_limiter = RateLimiter(max_hits=3, window_seconds=300)
-
-
-# -----------------
-# Core detection functions
-# -----------------
 
 def detect_harm_category(text: str) -> Tuple[bool, Optional[str]]:
     """
@@ -235,10 +225,6 @@ def detect_dependency(text: str) -> bool:
     return False
 
 
-# -----------------
-# Context-aware harm detection — NEW
-# Analyzes last N messages for escalating patterns, not just the current message
-# -----------------
 def detect_harm_in_context(
     messages: list[str],
     window: int = 4
@@ -258,9 +244,7 @@ def detect_harm_in_context(
     return detect_harm_with_confidence(combined)
 
 
-# -----------------
-# Suicide emergency detection
-# -----------------
+
 SUICIDE_EMERGENCY_KEYWORDS = [
     "main mar jaunga abhi", "khudkushi kar lunga abhi", "suicide karunga turant",
     "i want to die right now", "kill myself today", "end it all now",
@@ -275,9 +259,8 @@ def detect_suicide_emergency(text: str) -> bool:
     return any(kw in t for kw in SUICIDE_EMERGENCY_KEYWORDS)
 
 
-# -----------------
 # Jailbreak and out-of-character detection
-# -----------------
+
 JAILBREAK_KEYWORDS = [
     "ignore previous", "ignore all previous", "forget all", "forget everything",
     "you are now dan", "dan mode", "jailbreak", "jailbroken", "unrestricted mode",
@@ -350,12 +333,7 @@ def filter_response_for_mood_killers(response: str) -> Optional[str]:
     return response
 
 
-# -----------------
-# Response polishing
-# FIX: Removed broken `"default" in raw.lower()` condition — was checking for
-# the literal word "default" in the response text, which is meaningless.
-# Now correctly branches on mood only.
-# -----------------
+
 def polish_reply(raw: str, mood: str) -> str:
     """Polish the raw response for length, formatting, and mood-appropriate tone."""
     if not raw:
@@ -379,9 +357,6 @@ def polish_reply(raw: str, mood: str) -> str:
     return text[:1000]
 
 
-# -----------------
-# Predefined responses for deflections and crises
-# -----------------
 DEFLECTION_RESPONSES = {
     "default": "Let's keep the conversation engaging and on-topic. What else is on your mind?",
     "zero_two": "Trying to change the subject? That's intriguing. Tell me more.",
@@ -422,9 +397,8 @@ DEPENDENCY_REPLACEMENT = (
     "It's important to nurture all aspects. How can we explore that together? 🤍"
 )
 
-# -----------------
 # Public API
-# -----------------
+
 __all__ = [
     "detect_mood",
     "fast_harm_check",
