@@ -60,11 +60,45 @@ DENY_WORDS = {
 }
 
 GMAIL_HINT_WORDS = (
-    "gmail", "mail", "email", "inbox", "draft", "reply",
-    "subject", "recipient", "thread", "attachment", "attachments",
-    "archive", "unread", "star", "label", "labels", "send",
+    "gmail",
+    "mail",
+    "mails",
+    "email",
+    "emails",
+    "inbox",
+    "draft",
+    "reply",
+    "subject",
+    "recipient",
+    "thread",
+    "attachment",
+    "attachments",
+    "archive",
+    "unread",
+    "star",
+    "label",
+    "labels",
+    "send",
+    "latest mail",
+    "latest mails",
+    "recent mail",
+    "recent mails",
+    "meri mail",
+    "meri mails",
+    "mail dikhao",
+    "mails dikhao",
+    "email dikhao",
+    "emails dikhao",
+    "inbox me",
+    "mail kholo",
+    "mail open",
+    "reply karo",
+    "draft banao",
+    "label banao",
+    "archive karo",
+    "bhej do",
+    "bhejo",
 )
-
 
 def _json(data: Any) -> str:
     return json.dumps(data, ensure_ascii=False, default=str)
@@ -140,17 +174,41 @@ def should_handle_gmail_message(user_id: str, user_text: str) -> bool:
     if any(word in lower for word in GMAIL_HINT_WORDS):
         return True
 
+    action_words = (
+        "show", "check", "read", "open", "draft", "send", "reply",
+        "archive", "delete", "label", "summarize", "connect", "disconnect",
+        "dikhao", "dikha", "kholo", "padho", "banao", "bhejo", "bhej do",
+        "reply karo", "archive karo", "delete karo", "label banao",
+        "summary do", "connect karo"
+    )
+
+    object_words = (
+        "mail", "mails", "email", "emails", "inbox", "draft",
+        "thread", "attachment", "attachments", "label", "labels", "gmail"
+    )
+
+    if any(a in lower for a in action_words) and any(o in lower for o in object_words):
+        return True
+
     if "@" in text and any(word in lower for word in ("send", "mail", "email", "draft", "reply", "subject")):
         return True
 
     if state.get("last_draft_id") and any(
-        phrase in lower for phrase in ("send it", "send this", "mail it", "bhej do", "bhejo")
+        phrase in lower for phrase in (
+            "send it", "send this", "mail it", "bhej do", "bhejo",
+            "haan bhej do", "yes send", "send now"
+        )
     ):
         return True
 
     if state.get("last_search_results") and any(
-        phrase in lower
-        for phrase in ("first", "second", "third", "that one", "last one", "read it", "open it", "reply to that")
+        phrase in lower for phrase in (
+            "first", "second", "third", "that one", "last one",
+            "read it", "open it", "reply to that",
+            "pehli", "pehla", "pehle wali", "dusri", "teesri",
+            "last wali", "usko kholo", "us mail ko kholo",
+            "usko padho", "reply karo", "archive those", "un mails ko archive"
+        )
     ):
         return True
 
