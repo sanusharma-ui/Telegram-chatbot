@@ -60,44 +60,14 @@ DENY_WORDS = {
 }
 
 GMAIL_HINT_WORDS = (
-    "gmail",
-    "mail",
-    "mails",
-    "email",
-    "emails",
-    "inbox",
-    "draft",
-    "reply",
-    "subject",
-    "recipient",
-    "thread",
-    "attachment",
-    "attachments",
-    "archive",
-    "unread",
-    "star",
-    "label",
-    "labels",
-    "send",
-    "latest mail",
-    "latest mails",
-    "recent mail",
-    "recent mails",
-    "meri mail",
-    "meri mails",
-    "mail dikhao",
-    "mails dikhao",
-    "email dikhao",
-    "emails dikhao",
-    "inbox me",
-    "mail kholo",
-    "mail open",
-    "reply karo",
-    "draft banao",
-    "label banao",
-    "archive karo",
-    "bhej do",
-    "bhejo",
+    "gmail", "mail", "mails", "email", "emails", "inbox", "draft",
+    "reply", "subject", "recipient", "thread", "attachment",
+    "attachments", "archive", "unread", "star", "label", "labels",
+    "send", "latest mail", "latest mails", "recent mail",
+    "recent mails", "meri mail", "meri mails", "mail dikhao",
+    "mails dikhao", "email dikhao", "emails dikhao", "inbox me",
+    "mail kholo", "mail open", "reply karo", "draft banao",
+    "label banao", "archive karo", "bhej do", "bhejo",
 )
 
 def _json(data: Any) -> str:
@@ -862,7 +832,8 @@ def _execute_tool(user_id: str, name: str, arguments: Dict[str, Any]) -> Dict[st
         return {"ok": False, "error": f"unknown_tool:{name}"}
 
     try:
-        return fn(user_id=user_id, **arguments)
+        # THE FIX IS HERE: Default to empty dict if arguments is None
+        return fn(user_id=user_id, **(arguments or {}))
     except TypeError as e:
         logger.exception("Bad tool args for %s: %s", name, e)
         return {"ok": False, "error": f"bad_arguments:{name}"}
