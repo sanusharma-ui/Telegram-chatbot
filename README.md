@@ -1,6 +1,6 @@
 # AI Gmail Assistant for Telegram
 
-> A natural-language Gmail assistant inside Telegram that can read emails, search inbox, summarize threads, create drafts, manage labels, and handle email workflows through conversation — not just rigid commands.
+> A production-oriented Gmail assistant inside Telegram that can read emails, search inboxes, summarize threads, create drafts, manage labels, and handle real email workflows through natural conversation.
 
 <p align="center">
   <img alt="Python" src="https://img.shields.io/badge/Python-3.10%2B-blue">
@@ -15,92 +15,133 @@
 
 ## Overview
 
-This project is a production-oriented Gmail assistant that lives inside Telegram and behaves like a real conversational agent.
+This project is a **natural-language Gmail assistant built inside Telegram**.
 
-Instead of forcing users to memorize slash commands for every email task, the system allows natural requests like:
+Instead of forcing users to memorize rigid slash commands for every action, the system lets them interact like they would with a real assistant.
 
-- “Show my latest emails”
-- “Read the first one”
-- “Draft a reply saying I’m available on Monday”
-- “Create a label called internships”
-- “Archive those mails”
+For example, users can say:
 
-The assistant interprets intent, selects the correct Gmail tool, executes the action, and responds naturally.
+- **"Show my latest emails"**
+- **"Read the first one"**
+- **"Draft a reply saying I’m available on Monday"**
+- **"Create a label called internships"**
+- **"Archive those mails"**
 
-This makes the bot more practical, more human-friendly, and far more valuable for real users, founders, teams, and businesses.
+The assistant understands intent, selects the right Gmail tool, executes the workflow, and replies naturally.
+
+That makes it much more practical than a traditional command bot and much closer to the kind of AI workflow assistant businesses actually need.
 
 ---
 
 ## Why This Project Matters
 
-Most bots can only do one of these two things:
+Most bots usually do only one of these things well:
 
-1. **Chat well**
-2. **Perform useful actions**
+1. **Chat naturally**
+2. **Perform real actions**
 
-Very few can do both in a clean and reliable way.
+Very few do both in a reliable, product-oriented way.
 
-This system combines:
+This project combines:
 
 - **Conversational AI**
-- **Real Gmail actions**
+- **Real Gmail operations**
 - **OAuth-based secure access**
-- **Natural-language tool calling**
+- **Natural-language tool orchestration**
 - **Draft-first workflows**
 - **Safety-aware action handling**
 - **Telegram-native interaction**
 
-The result is a bot that feels closer to a real assistant than a traditional command bot.
+The result is not just a chatbot.  
+It is a working example of how to build an AI assistant that can interact with real systems and complete useful tasks.
 
 ---
 
 ## Core Features
 
-### Natural-Language Gmail Actions
-Users can talk normally instead of relying only on slash commands.
+### 1. Natural-Language Gmail Actions
 
-Examples:
-- “Meri latest mails dikhao”
-- “Inbox me kya aaya hai”
-- “Pehli wali kholo”
-- “HR ko reply draft karo ki Monday ko available hu”
+Users can speak normally instead of relying only on slash commands.
 
-### Gmail Inbox Access
+**Examples:**
+
+- `Meri latest mails dikhao`
+- `Inbox me kya aaya hai`
+- `Pehli wali kholo`
+- `HR ko reply draft karo ki Monday ko available hu`
+
+---
+
+### 2. Gmail Inbox Access
+
+The assistant can:
+
 - Fetch recent emails
 - Read full message bodies
 - Search inbox using Gmail search operators
 - Summarize email threads
 
-### Drafting Workflow
+---
+
+### 3. Drafting Workflow
+
+The bot supports practical email composition flows:
+
 - Create email drafts from plain instructions
 - Update existing drafts
 - Preview drafts before sending
 
-### Gmail Management
+This keeps the workflow safer and more professional than directly sending emails without review.
+
+---
+
+### 4. Gmail Management
+
+Users can manage inbox actions such as:
+
 - Mark read / unread
 - Star emails
 - Archive messages
 - Delete messages
-- Create and delete labels
+- Create labels
+- Delete labels
 - List attachments
 
-### OAuth Integration
-- Secure Gmail connection using Google OAuth
+---
+
+### 5. OAuth Integration
+
+Secure Gmail connection is handled through Google OAuth.
+
+This includes:
+
+- Gmail account connection flow
 - Token storage and refresh handling
-- Reconnect flow when session expires or is revoked
+- Reconnect flow when sessions expire or are revoked
 
-### Conversational Agent Layer
+---
+
+### 6. Conversational Agent Layer
+
 A dedicated Gmail agent decides:
-- whether the message is a normal chat request
-- or a Gmail action
-- which tool to call
-- how to present results naturally
 
-### Safety-Oriented Design
-- Confirmation-based action flow for sensitive operations
+- Whether the user message is a normal chat request or a Gmail task
+- Which tool should be called
+- How to structure the response naturally
+- When confirmation or safer handling is needed
+
+---
+
+### 7. Safety-Oriented Design
+
+The system is designed with operational caution in mind.
+
+It includes:
+
+- Confirmation-oriented flow for sensitive actions
 - Draft-first behavior for email composition
-- Reconnect handling when Gmail tokens expire
-- Safer tool execution with structured function routing
+- Reconnect handling for expired or revoked Gmail sessions
+- Safer function routing between chat and tool execution
 
 ---
 
@@ -115,22 +156,21 @@ User (Telegram)
         v
   process_update()
         |
-        +--------------------------+
-        |                          |
-        |                          |
-        v                          v
- /gmail command flow        Natural-language Gmail agent
-                                   |
-                                   v
-                          Tool selection via LLM
-                                   |
-                                   v
-                      Gmail tool execution layer
-                                   |
-                                   v
-                         Gmail API / OAuth / Drafts
+        +-----------------------------+
+        |                             |
+        v                             v
+ /gmail command flow         Natural-language Gmail agent
+                                      |
+                                      v
+                           Tool selection via LLM
+                                      |
+                                      v
+                           Gmail tool execution layer
+                                      |
+                                      v
+                      Gmail API / OAuth / Drafts / Labels
 
-```
+
 Tech Stack
 Python
 FastAPI
@@ -138,39 +178,39 @@ Aiogram
 Groq API
 Google Gmail API
 Google OAuth
-JSON / File-based memory
+JSON / file-based memory
 Optional Redis support
 Telegram Bot API
 What Makes It Valuable for Clients
 
 This is not just a toy chatbot.
 
-It demonstrates the kind of architecture needed for real AI productivity tools:
+It demonstrates the kind of architecture needed for real AI productivity products:
 
-AI assistant with real-world actions
-external API orchestration
-safe automation workflows
-secure auth handling
-conversational UX over operational systems
+AI assistants with real-world actions
+External API orchestration
+Secure authentication handling
+Safe automation workflows
+Conversational UX over operational systems
 LLM + tools integration
-production-focused backend design
+Production-focused backend design
 
-This pattern can be extended beyond Gmail into:
+This same architecture can be extended beyond Gmail into:
 
-calendars
+Calendars
 CRMs
-helpdesk systems
-internal dashboards
-customer support tools
-personal productivity assistants
-business workflow automation
+Helpdesk systems
+Internal dashboards
+Customer support tools
+Personal productivity assistants
+Business workflow automation
 
 In other words, this project is a strong proof of capability for building AI agents that actually do useful work.
 
 User Experience
 Command Mode
 
-Power users can still use slash commands.
+Power users can still use slash commands when they want direct control.
 
 Examples:
 
@@ -182,7 +222,7 @@ Examples:
 /gmail send <draft_id>
 Natural Conversation Mode
 
-Users can also speak normally.
+Users can also interact normally.
 
 Examples:
 
@@ -201,61 +241,61 @@ Main Telegram webhook entry point.
 
 Responsibilities:
 
-receives Telegram updates
-routes /gmail commands
-routes natural messages to Gmail agent
-falls back to general LLM reply for non-Gmail messages
+Receives Telegram updates
+Routes /gmail commands
+Routes natural-language messages to the Gmail agent
+Falls back to general LLM replies for non-Gmail conversations
 gmail_agent.py
 
 Conversational Gmail agent layer.
 
 Responsibilities:
 
-detect Gmail-related intent
-manage conversational context
-call tools
-stage confirmations
-return natural assistant replies
+Detect Gmail-related intent
+Manage conversational context
+Call tools
+Stage confirmations
+Return natural assistant-style replies
 gmail_integration.py
 
-Core Gmail OAuth and API integration.
+Core Gmail OAuth and API integration layer.
 
 Responsibilities:
 
 OAuth flow
-token storage
-token loading
+Token storage
+Token loading
 Gmail service creation
-inbox summaries
-draft handling helpers
+Inbox summaries
+Draft handling helpers
 gmail_search.py
 
 Handles Gmail search queries.
 
 gmail_inbox_ops.py
 
-Handles inbox operations like:
+Handles inbox operations such as:
 
-read
-archive
-delete
-mark read/unread
-star/unstar
+Read
+Archive
+Delete
+Mark read / unread
+Star / unstar
 gmail_drafts.py
 
 Handles:
 
-update draft
-delete draft
-fetch draft
+Update draft
+Delete draft
+Fetch draft
 gmail_labels.py
 
 Handles:
 
-list labels
-create label
-delete label
-apply/remove labels
+List labels
+Create label
+Delete label
+Apply / remove labels
 gmail_threads.py
 
 Handles thread fetching and summarization.
@@ -279,11 +319,12 @@ This project is built with operational caution in mind.
 Current Safety Principles
 Prefer draft creation before sending
 Use confirmation flow for sensitive actions
-Handle revoked/expired Gmail sessions gracefully
-Keep operational tools separate from plain chat replies
+Handle revoked or expired Gmail sessions gracefully
+Keep operational tools separate from normal chat replies
 Why This Matters
 
-AI assistants become useful only when they can take actions.
+AI assistants become truly useful when they can take actions.
+
 But once actions are enabled, safety becomes critical.
 
 This project is structured around that reality.
@@ -292,19 +333,20 @@ Setup
 1. Clone the repository
 git clone https://github.com/sanusharma-ui/Telegram-chatbot
 cd Telegram-chatbot
-2. Create virtual environment
+2. Create a virtual environment
 python -m venv .venv
-3. Activate virtual environment
+3. Activate the virtual environment
 
 Windows
+
 .venv\Scripts\activate
 
 Linux / macOS
-source .venv/bin/activate
 
+source .venv/bin/activate
 4. Install dependencies
 pip install -r requirements.txt
-5. Create .env
+5. Create a .env file
 TELEGRAM_BOT_TOKEN=your_telegram_bot_token
 WEBHOOK_SECRET_TOKEN=your_webhook_secret
 GROQ_API_KEY=your_groq_api_key
@@ -319,24 +361,26 @@ REDIS_URL=your_optional_redis_url
 uvicorn webhook_entry:app --host 0.0.0.0 --port 8000
 Example Use Cases
 Personal Assistant
-check new emails
-summarize inbox
-draft professional replies
-keep communication organized
+Check new emails
+Summarize inbox
+Draft professional replies
+Keep communication organized
 Founder Workflow
-screen investor emails
-manage outreach drafts
-organize labels by category
-quickly review threads
+Screen investor emails
+Manage outreach drafts
+Organize labels by category
+Quickly review threads
+
 Hiring / Internship Workflow
-draft replies to recruiters
-manage job-related labels
-summarize HR email threads
-archive irrelevant messages
+Draft replies to recruiters
+Manage job-related labels
+Summarize HR email threads
+Archive irrelevant messages
 Productivity Automation
-use Gmail as an actionable workspace
-reduce friction in email workflows
-move from command-based bots to assistant-like systems
+Use Gmail as an actionable workspace
+Reduce friction in email workflows
+Move from command-based bots to assistant-like systems
+
 Project Highlights
 Natural-language Gmail control inside Telegram
 Function-style tool orchestration
@@ -344,6 +388,7 @@ OAuth-secured Gmail access
 Draft, label, search, inbox, thread, and attachment support
 Human-friendly conversational UX
 Extendable architecture for future AI agents
+
 Example Prompts
 Meri latest mails dikhao
 Inbox me kya aaya hai
@@ -351,39 +396,41 @@ Pehli wali kholo
 HR ko reply draft karo ki Monday ko available hu
 Create a label called internships
 Archive those mails
+
 Roadmap
-stronger confirmation enforcement for send/delete actions
-richer Hinglish intent coverage
-reply-to-thread support
-attachment upload to drafts
-memory improvements for “send it”, “that one”, “reply to that”
-calendar integration
-multi-tool business assistant mode
-better analytics and event logging
-admin dashboard for monitoring tool actions
+Stronger confirmation enforcement for send / delete actions
+Richer Hinglish intent coverage
+Reply-to-thread support
+Attachment upload to drafts
+Better memory for references like “send it”, “that one”, or “reply to that”
+Calendar integration
+Multi-tool business assistant mode
+Better analytics and event logging
+Admin dashboard for monitoring tool actions
 Ideal Extensions
 
 This architecture can be expanded into:
 
 Gmail + Calendar executive assistant
 AI sales assistant
-support operations bot
-recruiting assistant
-internal workflow agent
-multi-app productivity agent
+Support operations bot
+Recruiting assistant
+Internal workflow agent
+Multi-app productivity agent
 Developer Note
 
 This project was built to explore a more serious direction for AI assistants:
-not just answering questions, but handling useful workflows in a reliable way.
+
+Not just answering questions — but handling useful workflows in a reliable, production-minded way.
 
 It reflects practical backend engineering around:
 
-conversational systems
+Conversational systems
 API integration
-tool calling
+Tool calling
 OAuth
-agent orchestration
-user-facing automation
+Agent orchestration
+User-facing automation
 About the Builder
 
 Sanu Sharma
@@ -392,25 +439,14 @@ AI & Python Developer focused on building practical intelligent systems, convers
 Portfolio: https://sanusharma.dev
 GitHub: https://github.com/sanusharma-ui
 LinkedIn: https://www.linkedin.com/in/sanu-sharma-256818341/
-
 Contact
 
 If you're looking for someone who can build:
 
 AI agents
-custom automation tools
-intelligent Telegram bots
+Custom automation tools
+Intelligent Telegram bots
 Gmail / API workflow assistants
-backend-heavy AI systems
+Backend-heavy AI systems
 
-feel free to connect.
-
-License
-
-This project is available under the MIT License.
-
-Final Note
-
-This is more than a bot.
-
-It is a practical demonstration of how conversational AI can be connected to real actions, real accounts, and real workflows in a way that feels useful, modern, and product-ready.
+Feel free to connect.
