@@ -130,6 +130,7 @@ User (Telegram)
                                    v
                          Gmail API / OAuth / Drafts
 
+```
 Tech Stack
 Python
 FastAPI
