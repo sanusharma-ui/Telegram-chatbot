@@ -1,4 +1,3 @@
-# webhook_entry.py
 import os
 import asyncio
 import logging
@@ -23,11 +22,14 @@ WEBHOOK_SECRET_TOKEN = os.getenv("WEBHOOK_SECRET_TOKEN")
 bot = Bot(token=BOT_TOKEN)
 app = FastAPI()
 
-# ====================== IMPORTS ======================
 from interaction.printer import send_human
 from backend.personas import PERSONAS
 from backend.groq_handler import generate_response, set_user_persona
 from backend.gmail_agent import should_handle_gmail_message, run_conversational_gmail_agent
+from backend.telegram_media import (
+    extract_text_from_update_dict,
+    extract_image_from_update_dict,
+)
 
 from backend.gmail_integration import (
     get_auth_url_for_user,
@@ -176,7 +178,7 @@ async def process_update(update: Dict[str, Any]):
 
         chat_id = chat.get("id")
         user_id = str(from_user.get("id")) if from_user.get("id") is not None else None
-        user_text = (message.get("text", "") or "").strip()
+        user_text = extract_text_from_update_dict(message)
 
         if not chat_id or not user_id:
             logger.debug("Skipping update with missing chat/user: %s", update)
@@ -184,6 +186,9 @@ async def process_update(update: Dict[str, Any]):
 
         async def _send(text: str):
             await send_human(bot, chat_id, text)
+
+        tokens = user_text.split() if user_text else []
+        first_token = tokens[0].split("@", 1)[0].lower() if tokens else ""
 
         # ---------------- /persona ----------------
         if user_text.startswith("/persona"):
@@ -197,14 +202,8 @@ async def process_update(update: Dict[str, Any]):
             await _send("Usage: /persona <name>\nAvailable: " + ", ".join(PERSONAS.keys()))
             return
 
-        tokens = user_text.split()
-        if not tokens:
-            return
-
-        first_token = tokens[0].split("@", 1)[0].lower()
-
         # ---------------- /start, /help, /gmail ----------------
-        if first_token in ("/gmail", "/help", "/start"):
+        if tokens and first_token in ("/gmail", "/help", "/start"):
             if first_token == "/start":
                 await _send("👋 Bot ready.\nUse /gmail to manage Gmail or /help for more commands.")
                 return
@@ -235,21 +234,21 @@ async def process_update(update: Dict[str, Any]):
                     await _send("❌ Gmail not connected. Use `/gmail connect` first.")
                     return
 
-            # ---------- /gmail connect ----------
             if subcmd == "connect":
                 try:
                     url = get_auth_url_for_user(user_id, need_send=True)
                     kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🔐 Connect Gmail", url=url)]])
                     await bot.send_message(
-                        chat_id, "Click below to securely connect Gmail:",
-                        reply_markup=kb, disable_web_page_preview=True
+                        chat_id,
+                        "Click below to securely connect Gmail:",
+                        reply_markup=kb,
+                        disable_web_page_preview=True
                     )
                 except Exception as e:
                     logger.exception("gmail connect error: %s", e)
                     await _send("❌ Failed to build OAuth link. Check server logs.")
                 return
 
-            # ---------- /gmail disconnect ----------
             if subcmd == "disconnect":
                 try:
                     disconnect_user(user_id)
@@ -259,7 +258,6 @@ async def process_update(update: Dict[str, Any]):
                     await _send("❌ Error disconnecting. Check logs.")
                 return
 
-            # ---------- /gmail inbox [smart] ----------
             if subcmd == "inbox":
                 sub = args[0].lower() if args else ""
                 try:
@@ -273,7 +271,6 @@ async def process_update(update: Dict[str, Any]):
                     await _send("❌ Error fetching inbox. Check logs.")
                 return
 
-            # ---------- /gmail search <query> ----------
             if subcmd == "search":
                 query = " ".join(args) if args else "in:inbox"
                 try:
@@ -303,7 +300,6 @@ async def process_update(update: Dict[str, Any]):
                     await _send("❌ Error during search. Check logs.")
                 return
 
-            # ---------- /gmail read <message_id> ----------
             if subcmd == "read":
                 if not args:
                     await _send("Usage: /gmail read <message_id>")
@@ -326,7 +322,6 @@ async def process_update(update: Dict[str, Any]):
                     await _send("❌ Error reading message. Check logs.")
                 return
 
-            # ---------- /gmail thread <thread_id> ----------
             if subcmd == "thread":
                 if not args:
                     await _send("Usage: /gmail thread <thread_id>")
@@ -340,7 +335,6 @@ async def process_update(update: Dict[str, Any]):
                     await _send("❌ Error summarizing thread. Check logs.")
                 return
 
-            # ---------- /gmail mark ----------
             if subcmd == "mark":
                 if len(args) < 2:
                     await _send("Usage: /gmail mark read|unread|star|archive <id1> <id2> ...")
@@ -366,7 +360,6 @@ async def process_update(update: Dict[str, Any]):
                     await _send("❌ Error performing mark operation. Check logs.")
                 return
 
-            # ---------- /gmail delete ----------
             if subcmd == "delete":
                 if not args:
                     await _send("Usage: /gmail delete <message_id> ...")
@@ -380,7 +373,6 @@ async def process_update(update: Dict[str, Any]):
                     await _send("❌ Error deleting messages. Check logs.")
                 return
 
-            # ---------- /gmail labels ----------
             if subcmd == "labels":
                 sub = args[0].lower() if args else ""
                 try:
@@ -419,7 +411,6 @@ async def process_update(update: Dict[str, Any]):
                     await _send("❌ Error with labels command. Check logs.")
                 return
 
-            # ---------- /gmail draft ----------
             if subcmd == "draft":
                 payload = user_text.partition("draft")[2].strip()
                 if not payload:
@@ -473,7 +464,6 @@ async def process_update(update: Dict[str, Any]):
                     await _send("❌ Error while creating draft. Check logs.")
                 return
 
-            # ---------- /gmail send ----------
             if subcmd == "send":
                 if not args:
                     await _send("Usage: /gmail send <draft_id>")
@@ -491,7 +481,7 @@ async def process_update(update: Dict[str, Any]):
             return
 
         # ---------------- Natural-language Gmail agent ----------------
-        if should_handle_gmail_message(user_id, user_text):
+        if user_text and should_handle_gmail_message(user_id, user_text):
             try:
                 result = await asyncio.to_thread(
                     run_conversational_gmail_agent,
@@ -523,17 +513,32 @@ async def process_update(update: Dict[str, Any]):
                 return
 
         # ---------------- Fallback: normal conversational reply ----------------
+        image_path = None
         try:
+            image_path, has_image = await extract_image_from_update_dict(bot, message)
+
+            if not user_text and not has_image:
+                return
+
+            prompt = user_text or ("Please analyze this image and respond helpfully." if has_image else "")
+
             reply = await asyncio.to_thread(
                 generate_response,
-                user_message=user_text,
+                user_message=prompt,
                 persona_key=user_id,
+                image_path=image_path,
                 user_ip=user_id,
             )
             await send_human(bot, chat_id, reply)
         except Exception as e:
             logger.exception("LLM reply failed: %s", e)
             await send_human(bot, chat_id, "Sorry — something went wrong generating a reply. Check logs.")
+        finally:
+            if image_path and os.path.exists(image_path):
+                try:
+                    os.remove(image_path)
+                except Exception:
+                    logger.exception("Failed to delete temp image: %s", image_path)
 
     except Exception as e:
         logger.exception("process_update failed: %s", e)
