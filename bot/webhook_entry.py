@@ -67,6 +67,10 @@ GMAIL_REQUIRED = {
 async def health():
     return {"status": "ok"}
 
+@app.get("/health")
+async def health_check():
+    return {"status": "ok"}
+
 
 @app.get("/gmail/callback", response_class=HTMLResponse)
 async def gmail_callback(request: Request):
