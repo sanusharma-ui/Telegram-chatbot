@@ -487,33 +487,39 @@ async def process_update(update: Dict[str, Any]):
         # ---------------- Natural-language Gmail agent ----------------
         if user_text and should_handle_gmail_message(user_id, user_text):
             try:
+                await bot.send_chat_action(chat_id, "typing")
+
                 result = await asyncio.to_thread(
                     run_conversational_gmail_agent,
-                    user_id,
-                    user_text,
+                    user_id=user_id,
+                    user_text=user_text,
                 )
 
                 ui_actions = result.get("ui_actions", []) or []
+
+                # Handle UI actions (Connect Gmail button etc.)
                 for action in ui_actions:
                     if action.get("ui_action") == "gmail_connect" and action.get("connect_url"):
                         kb = InlineKeyboardMarkup(
-                            inline_keyboard=[
-                                [InlineKeyboardButton(text="🔐 Connect Gmail", url=action["connect_url"])]
-                            ]
+                            inline_keyboard=[[InlineKeyboardButton(
+                                text="🔐 Connect Gmail",
+                                url=action["connect_url"]
+                            )]]
                         )
                         await bot.send_message(
                             chat_id,
-                            "Click below to securely connect Gmail:",
+                            action.get("message", "Click below to securely connect Gmail:"),
                             reply_markup=kb,
-                            disable_web_page_preview=True,
+                            disable_web_page_preview=True
                         )
 
-                await send_human(bot, chat_id, result.get("reply", "Done."))
+                reply_text = result.get("reply", "Done.")
+                await send_human(bot, chat_id, reply_text)
                 return
 
             except Exception as e:
                 logger.exception("Gmail natural agent failed: %s", e)
-                await send_human(bot, chat_id, "Sorry — something went wrong in the Gmail agent flow. Check logs.")
+                await send_human(bot, chat_id, "❌ Gmail agent mein kuch issue ho gaya. Thoda baad mein try karo.")
                 return
 
         # ---------------- Fallback: normal conversational reply ----------------
