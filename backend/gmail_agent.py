@@ -357,19 +357,19 @@ TOOL_SCHEMAS = [
             },
         },
     },
-    {
+     {
         "type": "function",
         "function": {
             "name": "gmail_create_draft",
-            "description": "Create a Gmail draft. Prefer this before sending a new email.",
+            "description": "Create a Gmail draft using natural instructions. Best tool when user wants to send or reply to an email. Hinglish instructions allowed.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "to": {"type": "string"},
                     "subject": {"type": "string"},
-                    "body": {"type": "string"},
+                    "instructions": {"type": "string"},
                 },
-                "required": ["to", "subject", "body"],
+                "required": ["to", "subject", "instructions"],
                 "additionalProperties": False,
             },
         },
@@ -392,39 +392,23 @@ TOOL_SCHEMAS = [
             },
         },
     },
-    # {
-    #     "type": "function",
-    #     "function": {
-    #         "name": "gmail_send_draft",
-    #         "description": "Send an existing draft by draft ID. Use confirmed=false first unless the user has clearly confirmed now.",
-    #         "parameters": {
-    #             "type": "object",
-    #             "properties": {
-    #                 "draft_id": {"type": "string"},
-    #                 "confirmed": {"type": "boolean"},
-    #             },
-    #             "required": ["draft_id", "confirmed"],
-    #             "additionalProperties": False,
-    #         },
-    #     },
-    # },
-        {
+    {
         "type": "function",
         "function": {
-            "name": "gmail_create_draft",
-            "description": "Create a Gmail draft using natural instructions. Best tool when user wants to send or reply to an email. Hinglish instructions allowed.",
+            "name": "gmail_send_draft",
+            "description": "Send an existing draft by draft ID. Use confirmed=false first unless the user has clearly confirmed now.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "to": {"type": "string"},
-                    "subject": {"type": "string"},
-                    "instructions": {"type": "string"},
+                    "draft_id": {"type": "string"},
+                    "confirmed": {"type": "boolean"},
                 },
-                "required": ["to", "subject", "instructions"],
+                "required": ["draft_id", "confirmed"],
                 "additionalProperties": False,
             },
         },
     },
+      
     {
         "type": "function",
         "function": {
