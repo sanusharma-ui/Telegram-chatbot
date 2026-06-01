@@ -392,18 +392,35 @@ TOOL_SCHEMAS = [
             },
         },
     },
-    {
+    # {
+    #     "type": "function",
+    #     "function": {
+    #         "name": "gmail_send_draft",
+    #         "description": "Send an existing draft by draft ID. Use confirmed=false first unless the user has clearly confirmed now.",
+    #         "parameters": {
+    #             "type": "object",
+    #             "properties": {
+    #                 "draft_id": {"type": "string"},
+    #                 "confirmed": {"type": "boolean"},
+    #             },
+    #             "required": ["draft_id", "confirmed"],
+    #             "additionalProperties": False,
+    #         },
+    #     },
+    # },
+        {
         "type": "function",
         "function": {
-            "name": "gmail_send_draft",
-            "description": "Send an existing draft by draft ID. Use confirmed=false first unless the user has clearly confirmed now.",
+            "name": "gmail_create_draft",
+            "description": "Create a Gmail draft using natural instructions. Best tool when user wants to send or reply to an email. Hinglish instructions allowed.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "draft_id": {"type": "string"},
-                    "confirmed": {"type": "boolean"},
+                    "to": {"type": "string"},
+                    "subject": {"type": "string"},
+                    "instructions": {"type": "string"},
                 },
-                "required": ["draft_id", "confirmed"],
+                "required": ["to", "subject", "instructions"],
                 "additionalProperties": False,
             },
         },
@@ -599,9 +616,36 @@ def _tool_summarize_thread(user_id: str, thread_id: str) -> Dict[str, Any]:
     return {"ok": True, "summary": summary or "Unable to summarize thread."}
 
 
-def _tool_create_draft(user_id: str, to: str, subject: str, body: str) -> Dict[str, Any]:
+def _tool_create_draft(user_id: str, to: str, subject: str, instructions: str) -> Dict[str, Any]:
     if not _gmail_connected(user_id):
         return {"ok": False, "error": "gmail_not_connected"}
+
+    # Smart AI email body generation
+    email_prompt = f"""Write a natural, professional yet friendly email body.
+
+To: {to}
+Subject: {subject}
+
+User instructions: {instructions}
+
+Important rules:
+- Sound like a real human (not robotic)
+- Use short paragraphs
+- Be polite and clear
+- No unnecessary AI phrases or emojis unless asked
+- Keep it concise (under 250 words)"""
+
+    try:
+        body_response = client.chat.completions.create(
+            model=AGENT_MODEL,
+            messages=[{"role": "user", "content": email_prompt}],
+            temperature=0.7,
+            max_tokens=700,
+        )
+        body = (body_response.choices[0].message.content or "").strip()
+    except Exception as e:
+        logger.warning("Failed to generate smart email body: %s", e)
+        body = instructions  # fallback
 
     created = create_draft(user_id, to, subject, body)
     if not created or not created.get("id"):
@@ -611,7 +655,6 @@ def _tool_create_draft(user_id: str, to: str, subject: str, body: str) -> Dict[s
 
     mem, state = _load_agent_memory(user_id)
     state["last_draft_id"] = draft_id
-    state["pending_action"] = None
     _save_agent_memory(user_id, mem)
 
     return {
@@ -619,7 +662,7 @@ def _tool_create_draft(user_id: str, to: str, subject: str, body: str) -> Dict[s
         "draft_id": draft_id,
         "to": to,
         "subject": subject,
-        "body_preview": body[:1000],
+        "body_preview": body[:900] + "..." if len(body) > 900 else body,
     }
 
 
