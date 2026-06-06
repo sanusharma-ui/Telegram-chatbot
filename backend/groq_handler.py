@@ -55,7 +55,7 @@ groq_client = Groq(api_key=GROQ_API_KEY)
 GEMINI_TEXT_MODEL = os.getenv("GEMINI_TEXT_MODEL", "gemma-4-31b-it")
 GEMINI_VISION_MODEL = os.getenv("GEMINI_VISION_MODEL", "gemma-4-31b-it")
 
-# Groq fallback models — keep as-is
+# Groq fallback models
 MODEL_PRIORITY = [
     "llama-3.3-70b-versatile",
     "meta-llama/llama-4-scout-17b-16e-instruct",
@@ -513,17 +513,40 @@ def generate_response_impl(
                 return "Image request Gemini par fail ho gaya. Logs check karo."
 
         # Text => Gemini primary, Groq fallback
+        # else:
+        #     try:
+        #         gemini_contents = build_gemini_contents(recent_conv, user_message)
+        #         raw_response = safe_gemini_call(
+        #             system_prompt=system_prompt,
+        #             contents=gemini_contents,
+        #             model=GEMINI_TEXT_MODEL
+        #         )
+        #     except Exception as error:
+        #         logger.warning("Gemini text call failed: %s", error)
+        #         raw_response = generate_with_groq_fallback(system_prompt, recent_conv, user_message)
+
+                # === GROQ PRIMARY (Fast) + GEMINI FALLBACK ===
         else:
             try:
-                gemini_contents = build_gemini_contents(recent_conv, user_message)
-                raw_response = safe_gemini_call(
-                    system_prompt=system_prompt,
-                    contents=gemini_contents,
-                    model=GEMINI_TEXT_MODEL
+                
+                raw_response = generate_with_groq_fallback(
+                    system_prompt, recent_conv, user_message
                 )
-            except Exception as error:
-                logger.warning("Gemini text call failed: %s", error)
-                raw_response = generate_with_groq_fallback(system_prompt, recent_conv, user_message)
+            except Exception as groq_error:
+                logger.warning("All Groq models failed: %s → Trying Gemini fallback", groq_error)
+                try:
+                    # Step 2: Gemini fallback only if Groq completely fails
+                    gemini_contents = build_gemini_contents(recent_conv, user_message)
+                    raw_response = safe_gemini_call(
+                        system_prompt=system_prompt,
+                        contents=gemini_contents,
+                        model=GEMINI_TEXT_MODEL
+                    )
+                except Exception as gemini_error:
+                    logger.exception("Gemini fallback also failed: %s", gemini_error)
+                    if is_gemini_quota_error(gemini_error):
+                        return "Bhai Groq aur Gemini dono busy hain abhi. 1-2 min baad try karna."
+                    return "Sorry, dono providers mein issue aa raha hai. Thodi der baad try karo."
 
         if raw_response is None:
             return "It appears the models are currently unavailable. Please try again in a bit."
