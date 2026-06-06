@@ -2,9 +2,12 @@ import os
 import json
 import logging
 import re
+import time
+import random
 from typing import Any, Dict, List, Optional, TypedDict, Literal
 
-from groq import Groq
+import groq
+from groq import Groq, RateLimitError
 
 from backend.gmail_integration import (
     get_auth_url_for_user,
@@ -46,8 +49,15 @@ if not GROQ_API_KEY:
 
 client = Groq(api_key=GROQ_API_KEY)
 
+# === MODEL FALLBACK CHAIN (cheaper/faster models at the end) ===
 AGENT_MODEL = os.getenv("GMAIL_AGENT_MODEL", "llama-3.3-70b-versatile")
-MAX_TOOL_ROUNDS = 7  # Increased for complex Gmail flows (search → read → draft → etc.)
+AGENT_MODEL_FALLBACKS = [
+    AGENT_MODEL,
+    "meta-llama/llama-4-scout-17b-16e-instruct",
+    "llama-3.1-8b-instant",
+]
+
+MAX_TOOL_ROUNDS = 5  # Reduced from 7 to save tokens on complex flows
 
 CONFIRM_WORDS = {
     "yes", "y", "haan", "ha", "hmm yes", "confirm", "confirmed",
@@ -145,6 +155,60 @@ def _safe_json_loads(raw: str, default: Optional[Dict[str, Any]] = None) -> Dict
         return default
 
 
+# === Robust Groq wrapper with model fallback (prevents 429 loops) ===
+def _safe_agent_completion(
+    messages: List[Dict[str, Any]],
+    tools: Optional[List[Dict]] = None,
+    tool_choice: str = "auto",
+    temperature: float = 0.2,
+    max_tokens: int = 700,
+) -> Any:
+    """
+    Calls Groq with automatic fallback across models.
+    Handles RateLimitError gracefully by trying next model.
+    """
+    last_error = None
+
+    for model_name in AGENT_MODEL_FALLBACKS:
+        try:
+            logger.info(f"→ Trying Groq model: {model_name}")
+            resp = client.chat.completions.create(
+                model=model_name,
+                messages=messages,
+                tools=tools,
+                tool_choice=tool_choice if tools else None,
+                temperature=temperature,
+                max_tokens=max_tokens,
+            )
+            logger.info(f"✓ Success with model: {model_name}")
+            return resp
+
+        except RateLimitError as e:
+            last_error = e
+            logger.warning(f"⚠ Rate limit hit on {model_name} (TPD). Trying next model...")
+            time.sleep(1.5 + random.uniform(0, 1.5))
+            continue
+
+        except groq.APIError as e:
+            last_error = e
+            if "429" in str(e) or "rate" in str(e).lower():
+                logger.warning(f"⚠ 429/Rate limit on {model_name}, trying next...")
+                time.sleep(2)
+                continue
+            logger.error(f"Groq API error on {model_name}: {e}")
+            raise
+
+        except Exception as e:
+            last_error = e
+            logger.warning(f"⚠ Unexpected error on {model_name}: {e}. Trying next model...")
+            time.sleep(1)
+            continue
+
+    # All models failed
+    logger.error(f"❌ All Groq models exhausted or rate limited. Last error: {last_error}")
+    raise last_error or RuntimeError("All Groq fallback models failed due to rate limits or errors.")
+
+
 # === NEW: Dynamic Router (LLM + Rules) ===
 ROUTER_SYSTEM_PROMPT = """
 You are a message router inside a chat assistant.
@@ -188,8 +252,7 @@ def _llm_route(user_id: str, user_text: str) -> Dict[str, Any]:
     messages.append({"role": "user", "content": user_text})
 
     try:
-        resp = client.chat.completions.create(
-            model=AGENT_MODEL,
+        resp = _safe_agent_completion(
             messages=messages,
             temperature=0,
             max_tokens=180,
@@ -205,7 +268,7 @@ def _llm_route(user_id: str, user_text: str) -> Dict[str, Any]:
                 data["confidence"] = 0.5
             return data
     except Exception as e:
-        logger.warning("Router LLM failed: %s", e)
+        logger.warning("Router LLM failed (all models): %s", e)
 
     return {}
 
@@ -772,16 +835,16 @@ Rules:
 """
 
     try:
-        body_response = client.chat.completions.create(
-            model=AGENT_MODEL,
+        # Use safe completion with fallback for email body generation
+        body_response = _safe_agent_completion(
             messages=[{"role": "user", "content": email_prompt}],
             temperature=0.5,
-            max_tokens=700,
+            max_tokens=600,
         )
         body = (body_response.choices[0].message.content or "").strip()
     except Exception as e:
-        logger.warning("Failed to generate smart email body: %s", e)
-        body = instructions
+        logger.warning("Failed to generate smart email body (all models): %s", e)
+        body = instructions  # fallback to raw instructions
 
     created = create_draft(user_id, to, subject, body)
     if not created or not created.get("id"):
@@ -1057,14 +1120,24 @@ def run_conversational_gmail_agent(user_id: str, user_text: str) -> Dict[str, An
         tool_round += 1
         logger.info("Gmail Agent round %d/%d for user=%s", tool_round, MAX_TOOL_ROUNDS, user_id)
 
-        completion = client.chat.completions.create(
-            model=AGENT_MODEL,
-            messages=messages,
-            tools=TOOL_SCHEMAS,
-            tool_choice="auto",
-            temperature=0.2,
-            max_tokens=700,
-        )
+        try:
+            completion = _safe_agent_completion(
+                messages=messages,
+                tools=TOOL_SCHEMAS,
+                tool_choice="auto",
+                temperature=0.2,
+                max_tokens=700,
+            )
+        except Exception as e:
+            logger.error(f"Gmail agent LLM call failed after all fallbacks in round {tool_round}: {e}")
+            reply = (
+                "Bhai Groq ka daily token limit almost khatam ho gaya hai. "
+                "Thodi der (10-15 min) baad try karna. Abhi simple requests se kaam chala lo."
+            )
+            mem, _ = _load_agent_memory(user_id)
+            _append_turn(mem, user_text, reply)
+            _save_agent_memory(user_id, mem)
+            return {"reply": reply, "ui_actions": ui_actions}
 
         msg = completion.choices[0].message
         tool_calls = getattr(msg, "tool_calls", None)
@@ -1106,7 +1179,6 @@ def run_conversational_gmail_agent(user_id: str, user_text: str) -> Dict[str, An
                 if result.get("ui_action"):
                     ui_actions.append(result)
 
-                # If tool failed, add clear error message so LLM doesn't loop forever
                 if not result.get("ok", True):
                     logger.warning("Tool %s failed: %s", tc.function.name, result.get("error"))
 
