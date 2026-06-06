@@ -47,7 +47,7 @@ if not GROQ_API_KEY:
 client = Groq(api_key=GROQ_API_KEY)
 
 AGENT_MODEL = os.getenv("GMAIL_AGENT_MODEL", "llama-3.3-70b-versatile")
-MAX_TOOL_ROUNDS = 4
+MAX_TOOL_ROUNDS = 7  # Increased for complex Gmail flows (search → read → draft → etc.)
 
 CONFIRM_WORDS = {
     "yes", "y", "haan", "ha", "hmm yes", "confirm", "confirmed",
@@ -963,20 +963,24 @@ TOOL_IMPL = {
 }
 
 
-# === UPDATED: Smarter SYSTEM_PROMPT ===
+# === IMPROVED SYSTEM_PROMPT for better Agentic behavior ===
 SYSTEM_PROMPT = """
-You are Aisha, a natural conversational assistant inside a Telegram bot.
+You are Aisha, a helpful and efficient Gmail assistant inside a Telegram bot.
 
-You can chat normally and perform Gmail actions through tools.
+You can chat normally OR use tools to perform real Gmail actions.
 
-Rules:
-- If the message is not clearly about Gmail, talk normally and do not force Gmail tools.
-- If the request is ambiguous, ask one short clarification question.
-- Never invent email details, recipients, subjects, dates, or facts.
-- Never generate fake / roleplay emails unless the user explicitly asks for example, demo, sample, or roleplay.
-- For sending drafts, deleting emails, deleting labels, or disconnecting Gmail, use confirmed=false first unless the user has explicitly confirmed in the current message.
-- Keep replies concise, clear, and natural.
-- If Gmail is not connected and the user clearly wants Gmail help, use the connect flow.
+CRITICAL RULES FOR EFFICIENT AGENT BEHAVIOR:
+1. Use the MINIMUM number of tools necessary to solve the user's request.
+2. After getting search results, if the user wants to read/summarize/draft, call the next tool immediately.
+3. Once you have enough information, STOP calling tools and give a clear, natural final reply.
+4. Never call the same tool repeatedly with similar arguments.
+5. If a tool returns an error (especially "gmail_not_connected"), tell the user clearly instead of retrying.
+6. For any destructive action (send, delete, disconnect), always ask for explicit confirmation first using confirmed=false.
+7. Never invent email content, recipients, or facts.
+8. Keep final replies short, friendly, and in Hinglish when user speaks Hinglish.
+9. If the request is not clearly about Gmail, just reply normally without using any Gmail tools.
+
+Current state is always shown below. Use it to resolve "first one", "that mail", "last draft" etc.
 """.strip()
 
 
@@ -1004,14 +1008,18 @@ def _build_messages(user_id: str, user_text: str) -> List[Dict[str, Any]]:
 def _execute_tool(user_id: str, name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
     fn = TOOL_IMPL.get(name)
     if not fn:
+        logger.warning("Unknown tool called: %s", name)
         return {"ok": False, "error": f"unknown_tool:{name}"}
 
+    logger.info("→ Executing tool: %s | args=%s", name, arguments)
+
     try:
-        # THE FIX IS HERE: Default to empty dict if arguments is None
-        return fn(user_id=user_id, **(arguments or {}))
+        result = fn(user_id=user_id, **(arguments or {}))
+        logger.info("← Tool result (%s): ok=%s, keys=%s", name, result.get("ok"), list(result.keys())[:6])
+        return result
     except TypeError as e:
         logger.exception("Bad tool args for %s: %s", name, e)
-        return {"ok": False, "error": f"bad_arguments:{name}"}
+        return {"ok": False, "error": f"bad_arguments:{name}", "detail": str(e)}
     except Exception as e:
         logger.exception("Tool execution failed for %s: %s", name, e)
         return {"ok": False, "error": f"tool_exception:{name}", "detail": str(e)}
@@ -1044,7 +1052,11 @@ def run_conversational_gmail_agent(user_id: str, user_text: str) -> Dict[str, An
     messages = _build_messages(user_id, user_text)
     ui_actions: List[Dict[str, Any]] = []
 
+    tool_round = 0
     for _ in range(MAX_TOOL_ROUNDS):
+        tool_round += 1
+        logger.info("Gmail Agent round %d/%d for user=%s", tool_round, MAX_TOOL_ROUNDS, user_id)
+
         completion = client.chat.completions.create(
             model=AGENT_MODEL,
             messages=messages,
@@ -1058,6 +1070,9 @@ def run_conversational_gmail_agent(user_id: str, user_text: str) -> Dict[str, An
         tool_calls = getattr(msg, "tool_calls", None)
 
         if tool_calls:
+            logger.info("Round %d: Model called %d tool(s): %s", tool_round,
+                        len(tool_calls), [tc.function.name for tc in tool_calls])
+
             assistant_tool_call_payload = []
             for tc in tool_calls:
                 assistant_tool_call_payload.append(
@@ -1091,6 +1106,10 @@ def run_conversational_gmail_agent(user_id: str, user_text: str) -> Dict[str, An
                 if result.get("ui_action"):
                     ui_actions.append(result)
 
+                # If tool failed, add clear error message so LLM doesn't loop forever
+                if not result.get("ok", True):
+                    logger.warning("Tool %s failed: %s", tc.function.name, result.get("error"))
+
                 messages.append(
                     {
                         "role": "tool",
@@ -1101,15 +1120,22 @@ def run_conversational_gmail_agent(user_id: str, user_text: str) -> Dict[str, An
                 )
             continue
 
+        # No more tool calls → final answer
         reply = (msg.content or "").strip() or "Done."
 
         mem, _ = _load_agent_memory(user_id)
         _append_turn(mem, user_text, reply)
         _save_agent_memory(user_id, mem)
 
+        logger.info("Gmail Agent finished in %d rounds", tool_round)
         return {"reply": reply, "ui_actions": ui_actions}
 
-    reply = "I completed part of the task, but the tool loop hit its safety limit. Please continue with a follow-up message."
+    # Safety limit hit
+    logger.warning("Gmail Agent hit MAX_TOOL_ROUNDS (%d) for user=%s", MAX_TOOL_ROUNDS, user_id)
+    reply = (
+        "Main thoda zyada tools use kar raha tha. "
+        "Thoda simple request se shuru karo ya specific batao kya chahiye (jaise 'latest 3 mails dikhao')."
+    )
     mem, _ = _load_agent_memory(user_id)
     _append_turn(mem, user_text, reply)
     _save_agent_memory(user_id, mem)
