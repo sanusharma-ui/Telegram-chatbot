@@ -1,4 +1,3 @@
-# polling_entry.py
 import os
 import asyncio
 import logging
@@ -36,7 +35,12 @@ from backend.gmail_send_safe import send_safely, send_draft_by_id
 from backend.gmail_threads import fetch_thread, summarize_thread_ai
 from backend.gmail_attachments import list_attachments
 from interaction.printer import send_human  # your helper to send nicely formatted messages
-from backend.gmail_agent import should_handle_gmail_message, run_conversational_gmail_agent
+from backend.gmail_agent import (
+    should_handle_gmail_message,
+    run_conversational_gmail_agent,
+    decide_route,
+    _handle_pending_confirmation,
+)
 
 load_dotenv()
 
@@ -468,96 +472,6 @@ async def gmail_handler(message: Message):
     await message.reply("Unknown subcommand. Use /gmail for help.")
     return
 
-# Normal conversation handler (non-command)
-# @dp.message()
-# async def handle_all(message: Message):
-#     user_text_raw = message.text or ""
-#     user_text = user_text_raw.strip()
-#     if not user_text:
-#         return
-
-#     user_id = str(message.from_user.id)
-#     chat_id = message.chat.id
-
-#     async def bg_task():
-#         try:
-#             await bot.send_chat_action(chat_id, "typing")
-#             reply_text = await asyncio.to_thread(
-#                 generate_response,
-#                 user_message=user_text,
-#                 persona_key=user_id,
-#                 user_ip=user_id
-#             )
-#             await send_human(bot, chat_id, reply_text)
-#         except Exception as e:
-#             logger.exception("background generate failed", exc_info=True)
-#             await send_human(bot, chat_id, "Sorry, something broke on my side... 😔")
-
-#     asyncio.create_task(bg_task())
-# @dp.message()
-# async def handle_all(message: Message):
-#     user_text_raw = message.text or ""
-#     user_text = user_text_raw.strip()
-#     if not user_text:
-#         return
-
-#     user_id = str(message.from_user.id)
-#     chat_id = message.chat.id
-
-#     # === NEW: Gmail Agent Check (Natural Language Support) ===
-#     if should_handle_gmail_message(user_id, user_text):
-#         async def gmail_agent_task():
-#             try:
-#                 await bot.send_chat_action(chat_id, "typing")
-                
-#                 result = await asyncio.to_thread(
-#                     run_conversational_gmail_agent,
-#                     user_id=user_id,
-#                     user_text=user_text
-#                 )
-                
-#                 reply = result.get("reply", "Done.")
-#                 ui_actions = result.get("ui_actions", [])
-
-#                 # Send the reply
-#                 await send_human(bot, chat_id, reply)
-
-#                 # Handle UI actions (like Connect Gmail button)
-#                 for action in ui_actions:
-#                     if action.get("ui_action") == "gmail_connect":
-#                         kb = InlineKeyboardMarkup(inline_keyboard=[[
-#                             InlineKeyboardButton(text="🔐 Connect Gmail", url=action["connect_url"])
-#                         ]])
-#                         await bot.send_message(
-#                             chat_id, 
-#                             action.get("message", "Connect Gmail:"), 
-#                             reply_markup=kb, 
-#                             disable_web_page_preview=True
-#                         )
-#             except Exception as e:
-#                 logger.exception("Gmail agent failed")
-#                 await send_human(bot, chat_id, "Kuch issue ho gaya Gmail side pe 😔")
-
-#         asyncio.create_task(gmail_agent_task())
-#         return
-#     # === END Gmail Agent ===
-
-#     # Normal chat (old behaviour) - only if not Gmail related
-#     async def normal_chat_task():
-#         try:
-#             await bot.send_chat_action(chat_id, "typing")
-#             reply_text = await asyncio.to_thread(
-#                 generate_response,
-#                 user_message=user_text,
-#                 persona_key=user_id,
-#                 user_ip=user_id
-#             )
-#             await send_human(bot, chat_id, reply_text)
-#         except Exception as e:
-#             logger.exception("background generate failed", exc_info=True)
-#             await send_human(bot, chat_id, "Sorry, something broke on my side... 😔")
-
-#     asyncio.create_task(normal_chat_task())
 
 @dp.message()
 async def handle_all(message: Message):
@@ -569,58 +483,73 @@ async def handle_all(message: Message):
     user_id = str(message.from_user.id)
     chat_id = message.chat.id
 
-    # === Gmail Agent Check (Natural Language) ===
-    if should_handle_gmail_message(user_id, user_text):
-        async def gmail_agent_task():
+    # First: pending confirmation can be resolved directly
+    pending_result = _handle_pending_confirmation(user_id, user_text)
+    if pending_result:
+        await send_human(bot, chat_id, pending_result["reply"])
+        return
+
+    # Dynamic route decision
+    route = await asyncio.to_thread(decide_route, user_id, user_text)
+    route_name = route.get("route", "general_chat")
+
+    # Clarification mode
+    if route_name == "clarify":
+        await send_human(bot, chat_id, route.get("clarification", "Can you clarify that a bit?"))
+        return
+
+    # General chat mode
+    if route_name == "general_chat":
+        async def normal_chat_task():
             try:
                 await bot.send_chat_action(chat_id, "typing")
-                
-                result = await asyncio.to_thread(
-                    run_conversational_gmail_agent,
-                    user_id=user_id,
-                    user_text=user_text
+                reply_text = await asyncio.to_thread(
+                    generate_response,
+                    user_message=user_text,
+                    persona_key=user_id,
+                    user_ip=user_id
                 )
-                
-                reply = result.get("reply", "Done.")
-                ui_actions = result.get("ui_actions", [])
-
-                await send_human(bot, chat_id, reply)
-
-                for action in ui_actions:
-                    if action.get("ui_action") == "gmail_connect":
-                        kb = InlineKeyboardMarkup(inline_keyboard=[[
-                            InlineKeyboardButton(text="🔐 Connect Gmail", url=action["connect_url"])
-                        ]])
-                        await bot.send_message(
-                            chat_id, 
-                            action.get("message", "Connect Gmail:"), 
-                            reply_markup=kb, 
-                            disable_web_page_preview=True
-                        )
+                await send_human(bot, chat_id, reply_text)
             except Exception as e:
-                logger.exception("Gmail agent failed")
-                await send_human(bot, chat_id, "Kuch issue ho gaya Gmail side pe 😔")
+                logger.exception("normal chat failed", exc_info=True)
+                await send_human(bot, chat_id, "Sorry bhai, kuch issue ho gaya... 😔")
 
-        asyncio.create_task(gmail_agent_task())
+        asyncio.create_task(normal_chat_task())
         return
-    # === END Gmail Agent ===
 
-    # === Normal Chat (Groq first) ===
-    async def normal_chat_task():
+    # Gmail route
+    async def gmail_agent_task():
         try:
             await bot.send_chat_action(chat_id, "typing")
-            reply_text = await asyncio.to_thread(
-                generate_response,
-                user_message=user_text,
-                persona_key=user_id,
-                user_ip=user_id
-            )
-            await send_human(bot, chat_id, reply_text)
-        except Exception as e:
-            logger.exception("normal chat failed", exc_info=True)
-            await send_human(bot, chat_id, "Sorry bhai, kuch issue ho gaya... 😔")
 
-    asyncio.create_task(normal_chat_task())
+            result = await asyncio.to_thread(
+                run_conversational_gmail_agent,
+                user_id=user_id,
+                user_text=user_text
+            )
+
+            reply = result.get("reply", "Done.")
+            ui_actions = result.get("ui_actions", [])
+
+            await send_human(bot, chat_id, reply)
+
+            for action in ui_actions:
+                if action.get("ui_action") == "gmail_connect":
+                    kb = InlineKeyboardMarkup(inline_keyboard=[[
+                        InlineKeyboardButton(text="🔐 Connect Gmail", url=action["connect_url"])
+                    ]])
+                    await bot.send_message(
+                        chat_id,
+                        action.get("message", "Connect Gmail:"),
+                        reply_markup=kb,
+                        disable_web_page_preview=True
+                    )
+        except Exception:
+            logger.exception("Gmail agent failed")
+            await send_human(bot, chat_id, "Kuch issue ho gaya Gmail side pe 😔")
+
+    asyncio.create_task(gmail_agent_task())
+
 
 # Graceful shutdown / main
 async def main():

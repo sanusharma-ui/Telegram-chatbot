@@ -1,7 +1,8 @@
 import os
 import json
 import logging
-from typing import Any, Dict, List, Optional
+import re
+from typing import Any, Dict, List, Optional, TypedDict, Literal
 
 from groq import Groq
 
@@ -70,6 +71,194 @@ GMAIL_HINT_WORDS = (
     "label banao", "archive karo", "bhej do", "bhejo",
 )
 
+# === NEW: Smart Routing Helpers ===
+class RouteResult(TypedDict, total=False):
+    route: Literal["general_chat", "gmail", "clarify", "confirm_pending"]
+    confidence: float
+    clarification: str
+    gmail_action: str
+    reason: str
+    cancel_pending: bool
+    confirm_pending: bool
+
+
+ROLEPLAY_HINTS = (
+    "roleplay", "role play", "fake mail", "fictional", "pretend", "pretending",
+    "sample mail", "demo mail", "mock mail", "example mail", "as if", "simulate",
+    "imaginary", "made up", "story mail", "character mail"
+)
+
+GMAIL_HINTS_STRICT = (
+    "gmail", "mail", "email", "inbox", "draft", "reply", "thread", "attachment",
+    "attachments", "subject", "send", "archive", "delete", "label", "labels",
+    "read", "open mail", "search mail", "compose", "forward", "unread", "star"
+)
+
+CONFIRM_HINTS = (
+    "yes", "y", "haan", "ha", "hmm yes", "confirm", "confirmed",
+    "ok", "okay", "send it", "send now", "do it", "kar do", "bhej do", "bhejo"
+)
+
+DENY_HINTS = (
+    "no", "n", "cancel", "stop", "mat karo", "rehne do", "don't", "dont", "nahin"
+)
+
+
+def _clean_text(text: str) -> str:
+    return re.sub(r"\s+", " ", (text or "").strip().lower())
+
+
+def _looks_like_roleplay(text: str) -> bool:
+    text = _clean_text(text)
+    return any(h in text for h in ROLEPLAY_HINTS)
+
+
+def _looks_like_gmail(text: str) -> bool:
+    text = _clean_text(text)
+    return any(h in text for h in GMAIL_HINTS_STRICT) or "@" in text
+
+
+def _looks_like_confirmation(text: str) -> bool:
+    text = _clean_text(text)
+    return text in CONFIRM_HINTS or any(text.startswith(x + " ") for x in CONFIRM_HINTS)
+
+
+def _looks_like_rejection(text: str) -> bool:
+    text = _clean_text(text)
+    return text in DENY_HINTS or any(text.startswith(x + " ") for x in DENY_HINTS)
+
+
+def _safe_json_loads(raw: str, default: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    default = default or {}
+    try:
+        raw = (raw or "").strip()
+        if raw.startswith("```"):
+            raw = raw.strip("`")
+            raw = raw.replace("json\n", "", 1).strip()
+        start = raw.find("{")
+        end = raw.rfind("}")
+        if start != -1 and end != -1 and end > start:
+            raw = raw[start:end + 1]
+        data = json.loads(raw)
+        return data if isinstance(data, dict) else default
+    except Exception:
+        return default
+
+
+# === NEW: Dynamic Router (LLM + Rules) ===
+ROUTER_SYSTEM_PROMPT = """
+You are a message router inside a chat assistant.
+
+Your job:
+- Decide whether the user is asking for general chat, Gmail help, or needs clarification.
+- Do NOT force Gmail just because the text mentions "mail" casually.
+- Use "clarify" when the message is ambiguous.
+- Use "clarify" when the user seems to want a fake/example/roleplay email but has not explicitly said example/demo/sample/roleplay.
+- Use "general_chat" for normal questions, opinions, explanations, advice, and anything not clearly about Gmail.
+- Use "confirm_pending" only when the user is clearly confirming or cancelling a previously pending Gmail action.
+
+Return ONLY JSON with this shape:
+{
+  "route": "general_chat|gmail|clarify|confirm_pending",
+  "confidence": 0.0,
+  "clarification": "short question if needed",
+  "gmail_action": "optional: connect|disconnect|inbox|search|read|thread|compose|reply|send|archive|delete|label|attachments|unknown",
+  "reason": "very short"
+}
+""".strip()
+
+
+def _llm_route(user_id: str, user_text: str) -> Dict[str, Any]:
+    mem, state = _load_agent_memory(user_id)
+    recent = mem.get("conversations", [])[-6:]
+
+    messages = [
+        {
+            "role": "system",
+            "content": ROUTER_SYSTEM_PROMPT + "\n\n" + _state_summary(user_id, state),
+        }
+    ]
+
+    for item in recent:
+        role = item.get("role")
+        msg = item.get("msg")
+        if role in ("user", "assistant") and msg:
+            messages.append({"role": role, "content": msg})
+
+    messages.append({"role": "user", "content": user_text})
+
+    try:
+        resp = client.chat.completions.create(
+            model=AGENT_MODEL,
+            messages=messages,
+            temperature=0,
+            max_tokens=180,
+        )
+        raw = (resp.choices[0].message.content or "").strip()
+        data = _safe_json_loads(raw, {})
+        route = str(data.get("route", "")).strip()
+        if route in {"general_chat", "gmail", "clarify", "confirm_pending"}:
+            data["route"] = route
+            try:
+                data["confidence"] = float(data.get("confidence", 0.5) or 0.5)
+            except Exception:
+                data["confidence"] = 0.5
+            return data
+    except Exception as e:
+        logger.warning("Router LLM failed: %s", e)
+
+    return {}
+
+
+def decide_route(user_id: str, user_text: str) -> RouteResult:
+    text = _clean_text(user_text)
+    mem, state = _load_agent_memory(user_id)
+
+    pending = state.get("pending_action")
+    if pending:
+        if _looks_like_confirmation(text):
+            return {"route": "confirm_pending", "confidence": 1.0, "confirm_pending": True}
+        if _looks_like_rejection(text):
+            return {"route": "confirm_pending", "confidence": 1.0, "cancel_pending": True}
+
+        if _looks_like_gmail(text):
+            return {"route": "gmail", "confidence": 0.85, "gmail_action": "unknown"}
+
+        return {
+            "route": "clarify",
+            "confidence": 0.95,
+            "clarification": "I’m waiting on a yes/no for the last Gmail action. Reply yes to continue or no to cancel.",
+        }
+
+    # Strong roleplay guard
+    if _looks_like_roleplay(text) and not any(x in text for x in ("real", "actual", "send", "deliver", "to ", "@")):
+        return {
+            "route": "clarify",
+            "confidence": 0.95,
+            "clarification": "Do you want a real email draft or just a sample / roleplay version?",
+        }
+
+    # Strong Gmail signals
+    if _looks_like_gmail(text):
+        if any(x in text for x in (
+            "draft", "compose", "reply", "send", "inbox", "thread", "read", "search",
+            "archive", "delete", "label", "attachment", "attachments", "connect", "disconnect"
+        )) or "@" in text:
+            return {"route": "gmail", "confidence": 0.9, "gmail_action": "unknown"}
+
+        llm = _llm_route(user_id, user_text)
+        if llm:
+            return llm
+        return {"route": "gmail", "confidence": 0.7, "gmail_action": "unknown"}
+
+    # Not obviously Gmail → ask LLM once
+    llm = _llm_route(user_id, user_text)
+    if llm:
+        return llm
+
+    return {"route": "general_chat", "confidence": 0.8}
+
+
 def _json(data: Any) -> str:
     return json.dumps(data, ensure_ascii=False, default=str)
 
@@ -131,58 +320,8 @@ def _append_turn(mem: Dict[str, Any], user_text: str, assistant_text: str) -> No
 
 
 def should_handle_gmail_message(user_id: str, user_text: str) -> bool:
-    text = (user_text or "").strip()
-    lower = text.lower()
-    if not lower:
-        return False
-
-    _, state = _load_agent_memory(user_id)
-
-    if state.get("pending_action"):
-        return True
-
-    if any(word in lower for word in GMAIL_HINT_WORDS):
-        return True
-
-    action_words = (
-        "show", "check", "read", "open", "draft", "send", "reply",
-        "archive", "delete", "label", "summarize", "connect", "disconnect",
-        "dikhao", "dikha", "kholo", "padho", "banao", "bhejo", "bhej do",
-        "reply karo", "archive karo", "delete karo", "label banao",
-        "summary do", "connect karo"
-    )
-
-    object_words = (
-        "mail", "mails", "email", "emails", "inbox", "draft",
-        "thread", "attachment", "attachments", "label", "labels", "gmail"
-    )
-
-    if any(a in lower for a in action_words) and any(o in lower for o in object_words):
-        return True
-
-    if "@" in text and any(word in lower for word in ("send", "mail", "email", "draft", "reply", "subject")):
-        return True
-
-    if state.get("last_draft_id") and any(
-        phrase in lower for phrase in (
-            "send it", "send this", "mail it", "bhej do", "bhejo",
-            "haan bhej do", "yes send", "send now"
-        )
-    ):
-        return True
-
-    if state.get("last_search_results") and any(
-        phrase in lower for phrase in (
-            "first", "second", "third", "that one", "last one",
-            "read it", "open it", "reply to that",
-            "pehli", "pehla", "pehle wali", "dusri", "teesri",
-            "last wali", "usko kholo", "us mail ko kholo",
-            "usko padho", "reply karo", "archive those", "un mails ko archive"
-        )
-    ):
-        return True
-
-    return False
+    route = decide_route(user_id, user_text)
+    return route.get("route") in {"gmail", "clarify", "confirm_pending"}
 
 
 def _execute_pending_action(user_id: str, pending: Dict[str, Any]) -> str:
@@ -604,32 +743,45 @@ def _tool_create_draft(user_id: str, to: str, subject: str, instructions: str) -
     if not _gmail_connected(user_id):
         return {"ok": False, "error": "gmail_not_connected"}
 
-    # Smart AI email body generation
-    email_prompt = f"""Write a natural, professional yet friendly email body.
+    combined = _clean_text(f"{to} {subject} {instructions}")
+
+    # anti-roleplay / anti-fake-mail guard
+    if _looks_like_roleplay(combined) and not any(x in combined for x in ("real", "actual", "sample", "demo", "example")):
+        return {
+            "ok": False,
+            "needs_clarification": True,
+            "message": "Do you want a real email draft or just a sample / roleplay version?",
+        }
+
+    email_prompt = f"""Write a real, natural email body.
 
 To: {to}
 Subject: {subject}
 
 User instructions: {instructions}
 
-Important rules:
-- Sound like a real human (not robotic)
+Rules:
+- Write only a real email draft, not a roleplay scene
+- Do not invent facts, commitments, names, or events
+- If the user asked for an example/demo/sample, keep it clearly labeled as a sample tone
+- Sound human and concise
 - Use short paragraphs
-- Be polite and clear
-- No unnecessary AI phrases or emojis unless asked
-- Keep it concise (under 250 words)"""
+- No robotic AI phrases
+- No emojis unless the user explicitly asks for them
+- Keep it under 250 words
+"""
 
     try:
         body_response = client.chat.completions.create(
             model=AGENT_MODEL,
             messages=[{"role": "user", "content": email_prompt}],
-            temperature=0.7,
+            temperature=0.5,
             max_tokens=700,
         )
         body = (body_response.choices[0].message.content or "").strip()
     except Exception as e:
         logger.warning("Failed to generate smart email body: %s", e)
-        body = instructions  # fallback
+        body = instructions
 
     created = create_draft(user_id, to, subject, body)
     if not created or not created.get("id"):
@@ -810,25 +962,21 @@ TOOL_IMPL = {
     "gmail_list_attachments": _tool_list_attachments,
 }
 
+
+# === UPDATED: Smarter SYSTEM_PROMPT ===
 SYSTEM_PROMPT = """
 You are Aisha, a natural conversational assistant inside a Telegram bot.
 
-You can:
-- chat normally,
-- understand natural language,
-- perform Gmail actions through tools.
+You can chat normally and perform Gmail actions through tools.
 
 Rules:
-- If the user wants Gmail help, use tools instead of telling them to type commands.
-- If Gmail is not connected, call gmail_connect.
-- Prefer creating drafts before sending a new email.
+- If the message is not clearly about Gmail, talk normally and do not force Gmail tools.
+- If the request is ambiguous, ask one short clarification question.
+- Never invent email details, recipients, subjects, dates, or facts.
+- Never generate fake / roleplay emails unless the user explicitly asks for example, demo, sample, or roleplay.
 - For sending drafts, deleting emails, deleting labels, or disconnecting Gmail, use confirmed=false first unless the user has explicitly confirmed in the current message.
-- You may use the recent search results and labels shown in system state to resolve phrases like "first one", "that email", "that label", or "send it".
-- Never invent IDs or tool results.
 - Keep replies concise, clear, and natural.
-- If the request is not about Gmail, you may still reply normally.
-
-When a tool returns needs_confirmation=true, ask a short confirmation question.
+- If Gmail is not connected and the user clearly wants Gmail help, use the connect flow.
 """.strip()
 
 
