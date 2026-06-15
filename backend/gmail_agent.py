@@ -155,7 +155,7 @@ def _safe_json_loads(raw: str, default: Optional[Dict[str, Any]] = None) -> Dict
         return default
 
 
-# === Robust Groq wrapper with model fallback (prevents 429 loops) ===
+# === Robust Groq wrapper with model fallback (FIXED: never pass tool_choice=None, broad fallback on ALL errors) ===
 def _safe_agent_completion(
     messages: List[Dict[str, Any]],
     tools: Optional[List[Dict]] = None,
@@ -165,48 +165,49 @@ def _safe_agent_completion(
 ) -> Any:
     """
     Calls Groq with automatic fallback across models.
-    Handles RateLimitError gracefully by trying next model.
+    FIXED: 
+    - Never passes tool_choice when tools=None (prevents 400 invalid_request_error)
+    - Broad except on ANY error so fallback actually tries all models (rate limit, 400, server errors etc.)
+    - Better logging and sleep strategy
     """
     last_error = None
 
     for model_name in AGENT_MODEL_FALLBACKS:
         try:
             logger.info(f"→ Trying Groq model: {model_name}")
-            resp = client.chat.completions.create(
-                model=model_name,
-                messages=messages,
-                tools=tools,
-                tool_choice=tool_choice if tools else None,
-                temperature=temperature,
-                max_tokens=max_tokens,
-            )
+            
+            create_kwargs = {
+                "model": model_name,
+                "messages": messages,
+                "temperature": temperature,
+                "max_tokens": max_tokens,
+            }
+            if tools:
+                create_kwargs["tools"] = tools
+                create_kwargs["tool_choice"] = tool_choice
+
+            resp = client.chat.completions.create(**create_kwargs)
             logger.info(f"✓ Success with model: {model_name}")
             return resp
 
-        except RateLimitError as e:
-            last_error = e
-            logger.warning(f"⚠ Rate limit hit on {model_name} (TPD). Trying next model...")
-            time.sleep(1.5 + random.uniform(0, 1.5))
-            continue
-
-        except groq.APIError as e:
-            last_error = e
-            if "429" in str(e) or "rate" in str(e).lower():
-                logger.warning(f"⚠ 429/Rate limit on {model_name}, trying next...")
-                time.sleep(2)
-                continue
-            logger.error(f"Groq API error on {model_name}: {e}")
-            raise
-
         except Exception as e:
             last_error = e
-            logger.warning(f"⚠ Unexpected error on {model_name}: {e}. Trying next model...")
-            time.sleep(1)
+            err_str = str(e).lower()
+            
+            if isinstance(e, RateLimitError) or "429" in err_str or "rate" in err_str or "tpd" in err_str:
+                logger.warning(f"⚠ Rate limit/TPD hit on {model_name}. Trying next model...")
+                time.sleep(2.0 + random.uniform(0, 2.0))
+            elif "invalid_request_error" in err_str or "400" in err_str:
+                logger.warning(f"⚠ Bad request (400) on {model_name} (tool_choice/params issue?). Trying next model anyway...")
+                time.sleep(0.8)
+            else:
+                logger.warning(f"⚠ Unexpected error on {model_name}: {e}. Trying next model...")
+                time.sleep(1.2)
             continue
 
     # All models failed
-    logger.error(f"❌ All Groq models exhausted or rate limited. Last error: {last_error}")
-    raise last_error or RuntimeError("All Groq fallback models failed due to rate limits or errors.")
+    logger.error(f"❌ All Groq models exhausted. Last error: {last_error}")
+    raise last_error or RuntimeError("All Groq fallback models failed.")
 
 
 # === NEW: Dynamic Router (LLM + Rules) ===
@@ -765,11 +766,6 @@ def _tool_search(user_id: str, query: str, max_results: int = 10) -> Dict[str, A
             }
         )
 
-    # mem, state = _load_agent_memory(user_id)
-    # state["last_search_results"] = hydrated[:10]
-    # state["pending_action"] = None
-    # _save_agent_memory(user_id, mem)
-
     mem, state = _load_agent_memory(user_id)
     state["last_search_results"] = hydrated[:10]
     _save_agent_memory(user_id, mem)
@@ -1109,8 +1105,7 @@ def run_conversational_gmail_agent(user_id: str, user_text: str) -> Dict[str, An
         _save_agent_memory(user_id, mem)
         return {"reply": reply, "ui_actions": []}
 
-    #New routing block
-
+    # === NEW ROUTING BLOCK (with early returns for non-Gmail) ===
     route_info = decide_route(user_id, user_text)
     
     if route_info.get("route") == "clarify":
@@ -1141,7 +1136,8 @@ def run_conversational_gmail_agent(user_id: str, user_text: str) -> Dict[str, An
         _save_agent_memory(user_id, mem)
         return {"reply": reply, "ui_actions": []}
 
-        messages = _build_messages(user_id, user_text)
+    # === GMAIL PATH: now safe, messages is always defined here ===
+    messages = _build_messages(user_id, user_text)
     ui_actions: List[Dict[str, Any]] = []
 
     tool_round = 0
