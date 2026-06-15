@@ -8,6 +8,7 @@ from fastapi.responses import HTMLResponse
 from aiogram import Bot
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from dotenv import load_dotenv
+from contextlib import asynccontextmanager
 
 load_dotenv()
 logging.basicConfig(level=logging.INFO)
@@ -56,6 +57,8 @@ from backend.gmail_threads import summarize_thread_ai
 from backend.gmail_drafts import update_draft, delete_draft, get_draft
 from backend.gmail_send_safe import send_safely, send_draft_by_id
 from backend.gmail_attachments import list_attachments, download_attachment, attach_file_to_draft
+from backend.conversation_tracker import track_user_message
+import os as os_module
 
 GMAIL_REQUIRED = {
     "inbox", "search", "read", "thread", "mark",
@@ -187,6 +190,9 @@ async def process_update(update: Dict[str, Any]):
         if not chat_id or not user_id:
             logger.debug("Skipping update with missing chat/user: %s", update)
             return
+        
+        if user_id == os_module.getenv("ADMIN_ID") and user_text:
+            track_user_message(chat_id, user_id, user_text)
 
         async def _send(text: str):
             await send_human(bot, chat_id, text)
@@ -552,3 +558,14 @@ async def process_update(update: Dict[str, Any]):
 
     except Exception as e:
         logger.exception("process_update failed: %s", e)
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+
+    from bot.background_worker import start_auto_responder
+    start_auto_responder(bot)
+    logger.info("✅ Auto Smart Follow-up Worker Started (Webhook mode)")
+    yield
+    
+
+app = FastAPI(lifespan=lifespan)

@@ -23,6 +23,7 @@ from backend.gmail_integration import (
     disconnect_user,
     _get_gmail_service_for_user
 )
+from backend.conversation_tracker import track_user_message
 from backend.gmail_inbox_ops import (
     read_full_email, mark_read, mark_unread, star_messages,
     unstar_messages, archive_messages, delete_messages,
@@ -483,6 +484,9 @@ async def handle_all(message: Message):
     user_id = str(message.from_user.id)
     chat_id = message.chat.id
 
+    if user_id == os.getenv("ADMIN_ID") and user_text:
+        track_user_message(chat_id, user_id, user_text)
+
     # First: pending confirmation can be resolved directly
     pending_result = _handle_pending_confirmation(user_id, user_text)
     if pending_result:
@@ -553,7 +557,15 @@ async def handle_all(message: Message):
 
 # Graceful shutdown / main
 async def main():
+
     print("🤖 Bot is starting (polling mode)...")
+
+    # === START AUTO SMART FOLLOWUP WORKER ===
+    from bot.background_worker import start_auto_responder
+    start_auto_responder(bot)
+    print("✅ Auto Smart Follow-up Worker Started")
+    # =========================================
+
     try:
         await dp.start_polling(bot, allowed_updates=["message", "callback_query"])
     finally:
