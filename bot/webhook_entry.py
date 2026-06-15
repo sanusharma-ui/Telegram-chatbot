@@ -21,7 +21,17 @@ if not BOT_TOKEN:
 WEBHOOK_SECRET_TOKEN = os.getenv("WEBHOOK_SECRET_TOKEN")
 
 bot = Bot(token=BOT_TOKEN)
-app = FastAPI()
+
+# ✅ FIX: Lifespan function yahan upar move kar diya
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    from bot.background_worker import start_auto_responder
+    start_auto_responder(bot)
+    logger.info("✅ Auto Smart Follow-up Worker Started (Webhook mode)")
+    yield
+
+# ✅ FIX: App sirf ek baar initialize ho raha hai, routes banne se pehle
+app = FastAPI(lifespan=lifespan)
 
 from interaction.printer import send_human
 from backend.personas import PERSONAS
@@ -558,14 +568,3 @@ async def process_update(update: Dict[str, Any]):
 
     except Exception as e:
         logger.exception("process_update failed: %s", e)
-
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-
-    from bot.background_worker import start_auto_responder
-    start_auto_responder(bot)
-    logger.info("✅ Auto Smart Follow-up Worker Started (Webhook mode)")
-    yield
-    
-
-app = FastAPI(lifespan=lifespan)
