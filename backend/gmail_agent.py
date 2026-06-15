@@ -765,9 +765,13 @@ def _tool_search(user_id: str, query: str, max_results: int = 10) -> Dict[str, A
             }
         )
 
+    # mem, state = _load_agent_memory(user_id)
+    # state["last_search_results"] = hydrated[:10]
+    # state["pending_action"] = None
+    # _save_agent_memory(user_id, mem)
+
     mem, state = _load_agent_memory(user_id)
     state["last_search_results"] = hydrated[:10]
-    state["pending_action"] = None
     _save_agent_memory(user_id, mem)
 
     return {"ok": True, "results": hydrated}
@@ -1089,6 +1093,7 @@ def _execute_tool(user_id: str, name: str, arguments: Dict[str, Any]) -> Dict[st
 
 
 def run_conversational_gmail_agent(user_id: str, user_text: str) -> Dict[str, Any]:
+    
     if fast_harm_check(user_text):
         return {"reply": CRISIS_RESPONSES["harm"], "ui_actions": []}
 
@@ -1104,6 +1109,30 @@ def run_conversational_gmail_agent(user_id: str, user_text: str) -> Dict[str, An
         _save_agent_memory(user_id, mem)
         return {"reply": reply, "ui_actions": []}
 
+    #New routing block
+
+    route_info = decide_route(user_id, user_text)
+    
+    if route_info.get("route") == "clarify":
+        reply = route_info.get("clarification", "Bhai isko thoda clear batao, kya karna hai?")
+        mem, _ = _load_agent_memory(user_id)
+        _append_turn(mem, user_text, reply)
+        _save_agent_memory(user_id, mem)
+        return {"reply": reply, "ui_actions": []}
+        
+    if route_info.get("route") == "general_chat":
+        # Bypass heavy Gmail tool loops for standard chats
+        messages = _build_messages(user_id, user_text)
+        try:
+            resp = _safe_agent_completion(messages=messages, tools=None, temperature=0.6, max_tokens=600)
+            reply = resp.choices[0].message.content.strip()
+        except Exception:
+            reply = "Bhai abhi Groq me thoda issue hai, thodi der baad try karna."
+        mem, _ = _load_agent_memory(user_id)
+        _append_turn(mem, user_text, reply)
+        _save_agent_memory(user_id, mem)
+        return {"reply": reply, "ui_actions": []}
+ 
     pending_result = _handle_pending_confirmation(user_id, user_text)
     if pending_result:
         reply = pending_result["reply"]
@@ -1167,40 +1196,45 @@ def run_conversational_gmail_agent(user_id: str, user_text: str) -> Dict[str, An
                 }
             )
 
-            for tc in tool_calls:
+        stop_tool_loop = False  # NAYA: Loop break karne ke liye flag
+
+        for tc in tool_calls:
                 raw_args = tc.function.arguments or "{}"
-                try:
+                try: 
                     parsed_args = json.loads(raw_args)
-                except Exception:
+                except Exception: 
                     parsed_args = {}
 
                 result = _execute_tool(user_id, tc.function.name, parsed_args)
 
-                if result.get("ui_action"):
+                if result.get("ui_action"): 
                     ui_actions.append(result)
+                
+                # NAYA: Agar connection nahi hai ya confirmation chahiye, toh aur tool calls mat karo
+                if result.get("error") == "gmail_not_connected" or result.get("needs_confirmation"):
+                    stop_tool_loop = True
 
-                if not result.get("ok", True):
-                    logger.warning("Tool %s failed: %s", tc.function.name, result.get("error"))
+                messages.append({"role": "tool", "tool_call_id": tc.id, "name": tc.function.name, "content": _json(result)})
 
-                messages.append(
-                    {
-                        "role": "tool",
-                        "tool_call_id": tc.id,
-                        "name": tc.function.name,
-                        "content": _json(result),
-                    }
-                )
-            continue
+        if stop_tool_loop:
+                # Loop tod do aur LLM se direct final natural reply generate karwao
+                try:
+                    final_completion = _safe_agent_completion(messages=messages, tools=None, temperature=0.2, max_tokens=400)
+                    reply = (final_completion.choices[0].message.content or "").strip()
+                except Exception:
+                    reply = "Bhai connection ya permission ka scene hai, please check karo."
+                break  # This stops the infinite tool loop
+        continue
 
-        # No more tool calls → final answer
-        reply = (msg.content or "").strip() or "Done."
+        # # No more tool calls → final answer
+        # reply = (msg.content or "").strip() or "Done."
 
-        mem, _ = _load_agent_memory(user_id)
-        _append_turn(mem, user_text, reply)
-        _save_agent_memory(user_id, mem)
+        # mem, _ = _load_agent_memory(user_id)
+        # _append_turn(mem, user_text, reply)
+        # _save_agent_memory(user_id, mem)
 
-        logger.info("Gmail Agent finished in %d rounds", tool_round)
-        return {"reply": reply, "ui_actions": ui_actions}
+        # logger.info("Gmail Agent finished in %d rounds", tool_round)
+        # return {"reply": reply, "ui_actions": ui_actions}
 
     # Safety limit hit
     logger.warning("Gmail Agent hit MAX_TOOL_ROUNDS (%d) for user=%s", MAX_TOOL_ROUNDS, user_id)
