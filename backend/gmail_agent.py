@@ -57,7 +57,7 @@ AGENT_MODEL_FALLBACKS = [
     "llama-3.1-8b-instant",
 ]
 
-MAX_TOOL_ROUNDS = 5  # Reduced from 7 to save tokens on complex flows
+MAX_TOOL_ROUNDS = int(os.getenv("GMAIL_AGENT_MAX_TOOL_ROUNDS", "3"))
 
 CONFIRM_WORDS = {
     "yes", "y", "haan", "ha", "hmm yes", "confirm", "confirmed",
@@ -1141,7 +1141,8 @@ def run_conversational_gmail_agent(user_id: str, user_text: str) -> Dict[str, An
     ui_actions: List[Dict[str, Any]] = []
 
     tool_round = 0
-    reply = "Sorry, kuch issue aa gaya."
+    reply = ""
+    seen_tool_calls = set()
 
     for _ in range(MAX_TOOL_ROUNDS):
         tool_round += 1
@@ -1208,12 +1209,23 @@ def run_conversational_gmail_agent(user_id: str, user_text: str) -> Dict[str, An
             except Exception:
                 parsed_args = {}
 
-            result = _execute_tool(user_id, tc.function.name, parsed_args)
+            call_signature = (tc.function.name, json.dumps(parsed_args, sort_keys=True, ensure_ascii=False))
+            if call_signature in seen_tool_calls:
+                logger.warning("Duplicate Gmail tool call stopped: %s %s", tc.function.name, parsed_args)
+                result = {
+                    "ok": False,
+                    "error": "duplicate_tool_call_stopped",
+                    "message": "The same tool call was already tried. Stop and answer from the available results.",
+                }
+                stop_tool_loop = True
+            else:
+                seen_tool_calls.add(call_signature)
+                result = _execute_tool(user_id, tc.function.name, parsed_args)
 
             if result.get("ui_action"):
                 ui_actions.append(result)
 
-            if result.get("error") == "gmail_not_connected" or result.get("needs_confirmation"):
+            if result.get("error") in {"gmail_not_connected", "duplicate_tool_call_stopped"} or result.get("needs_confirmation"):
                 stop_tool_loop = True
 
             messages.append({
@@ -1240,6 +1252,9 @@ def run_conversational_gmail_agent(user_id: str, user_text: str) -> Dict[str, An
             "Main thoda zyada tools use kar raha tha. "
             "Thoda simple request se shuru karo ya specific batao kya chahiye (jaise 'latest 3 mails dikhao')."
         )
+
+    if not reply:
+        reply = "Bhai request samajh gaya, but complete karne se pehle thoda specific bata do kya action chahiye."
 
     mem, _ = _load_agent_memory(user_id)
     _append_turn(mem, user_text, reply)

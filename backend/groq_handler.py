@@ -2,17 +2,16 @@ import os
 import io
 import json
 import time
-import random
 import hashlib
 import logging
 from functools import lru_cache
 from typing import List, Dict, Any, Optional, Tuple
 
 from dotenv import load_dotenv
-from groq import Groq
+from groq import Groq, RateLimitError
 from PIL import Image
 from ratelimit import limits, sleep_and_retry
-from tenacity import retry, stop_after_attempt, wait_exponential, wait_fixed, wait_chain, retry_if_exception_type
+from tenacity import retry, stop_after_attempt, wait_fixed, retry_if_exception_type
 import redis
 
 from google import genai
@@ -366,8 +365,8 @@ def safe_gemini_call(system_prompt: str, contents: List[Any], model: str) -> str
 
 
 @retry(
-    stop=stop_after_attempt(3),
-    wait=wait_chain(wait_fixed(2), wait_exponential(multiplier=1, min=4, max=10)),
+    stop=stop_after_attempt(1),
+    wait=wait_fixed(0),
     retry=retry_if_exception_type(Exception)
 )
 def safe_groq_call(client: Groq, messages: List[Dict[str, Any]], model: str) -> str:
@@ -401,8 +400,9 @@ def generate_with_groq_fallback(
             break
         except Exception as error:
             logger.error("Groq error with model %s: %s", model, error)
-            if "429" in str(error):
-                time.sleep(10 + random.uniform(0, 2))
+            err = str(error).lower()
+            if isinstance(error, RateLimitError) or "429" in err or "too many requests" in err:
+                logger.warning("Groq rate limit hit on %s; moving to next fallback without retry storm.", model)
             continue
 
     if raw_response is None:

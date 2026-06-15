@@ -23,7 +23,7 @@ from backend.gmail_integration import (
     disconnect_user,
     _get_gmail_service_for_user
 )
-from backend.conversation_tracker import track_user_message
+from backend.conversation_tracker import track_admin_reply, track_incoming_message
 from backend.gmail_inbox_ops import (
     read_full_email, mark_read, mark_unread, star_messages,
     unstar_messages, archive_messages, delete_messages,
@@ -484,8 +484,11 @@ async def handle_all(message: Message):
     user_id = str(message.from_user.id)
     chat_id = message.chat.id
 
-    if user_id == os.getenv("ADMIN_ID") and user_text:
-        track_user_message(chat_id, user_id, user_text)
+    if user_text:
+        if user_id == os.getenv("ADMIN_ID"):
+            track_admin_reply(chat_id, user_id, user_text)
+        else:
+            track_incoming_message(chat_id, user_id, user_text)
 
     # First: pending confirmation can be resolved directly
     pending_result = _handle_pending_confirmation(user_id, user_text)

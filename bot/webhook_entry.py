@@ -67,7 +67,7 @@ from backend.gmail_threads import summarize_thread_ai
 from backend.gmail_drafts import update_draft, delete_draft, get_draft
 from backend.gmail_send_safe import send_safely, send_draft_by_id
 from backend.gmail_attachments import list_attachments, download_attachment, attach_file_to_draft
-from backend.conversation_tracker import track_user_message
+from backend.conversation_tracker import track_admin_reply, track_incoming_message
 import os as os_module
 
 GMAIL_REQUIRED = {
@@ -201,8 +201,11 @@ async def process_update(update: Dict[str, Any]):
             logger.debug("Skipping update with missing chat/user: %s", update)
             return
         
-        if user_id == os_module.getenv("ADMIN_ID") and user_text:
-            track_user_message(chat_id, user_id, user_text)
+        if user_text:
+            if user_id == os_module.getenv("ADMIN_ID"):
+                track_admin_reply(chat_id, user_id, user_text)
+            else:
+                track_incoming_message(chat_id, user_id, user_text)
 
         async def _send(text: str):
             await send_human(bot, chat_id, text)
