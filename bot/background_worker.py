@@ -32,6 +32,7 @@ class AutoResponder:
         while self.running:
             try:
                 inactive_chats = get_inactive_conversations()
+                logger.info("Auto responder scan complete: inactive_count=%d", len(inactive_chats))
 
                 for data in inactive_chats:
                     chat_id = data.get("chat_id")

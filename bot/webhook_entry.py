@@ -22,10 +22,51 @@ WEBHOOK_SECRET_TOKEN = os.getenv("WEBHOOK_SECRET_TOKEN")
 
 bot = Bot(token=BOT_TOKEN)
 
+
+def _build_webhook_url() -> str | None:
+    explicit = os.getenv("WEBHOOK_URL", "").strip()
+    if explicit:
+        return explicit
+
+    base_url = (
+        os.getenv("PUBLIC_BASE_URL", "").strip()
+        or os.getenv("RENDER_EXTERNAL_URL", "").strip()
+    )
+    if not base_url:
+        return None
+
+    return base_url.rstrip("/") + "/webhook"
+
+
+async def configure_telegram_webhook() -> None:
+    webhook_url = _build_webhook_url()
+    if not webhook_url:
+        logger.warning(
+            "Telegram webhook not configured. Set WEBHOOK_URL or PUBLIC_BASE_URL to enable updates."
+        )
+        return
+
+    kwargs = {"url": webhook_url, "drop_pending_updates": False}
+    if WEBHOOK_SECRET_TOKEN:
+        kwargs["secret_token"] = WEBHOOK_SECRET_TOKEN
+
+    try:
+        await bot.set_webhook(**kwargs)
+        info = await bot.get_webhook_info()
+        logger.info(
+            "Telegram webhook configured: url=%s pending=%s last_error=%s",
+            getattr(info, "url", webhook_url),
+            getattr(info, "pending_update_count", None),
+            getattr(info, "last_error_message", None),
+        )
+    except Exception as e:
+        logger.exception("Failed to configure Telegram webhook: %s", e)
+
 # ✅ FIX: Lifespan function yahan upar move kar diya
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     from bot.background_worker import start_auto_responder
+    await configure_telegram_webhook()
     start_auto_responder(bot)
     logger.info("✅ Auto Smart Follow-up Worker Started (Webhook mode)")
     yield
@@ -79,6 +120,12 @@ GMAIL_REQUIRED = {
 @app.get("/")
 async def health():
     return {"status": "ok"}
+
+
+@app.head("/")
+async def health_head():
+    return {"status": "ok"}
+
 
 @app.get("/health")
 async def health_check():
@@ -179,6 +226,16 @@ async def telegram_webhook(request: Request):
     except Exception as e:
         logger.error("Invalid JSON in webhook: %s", e)
         return {"ok": True}
+
+    message = update.get("message") or update.get("edited_message") or {}
+    chat = message.get("chat", {})
+    from_user = message.get("from", {})
+    logger.info(
+        "Telegram webhook update received: update_id=%s chat_id=%s user_id=%s",
+        update.get("update_id"),
+        chat.get("id"),
+        from_user.get("id"),
+    )
 
     asyncio.create_task(safe_process_update(update))
     return {"ok": True}

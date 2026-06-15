@@ -94,6 +94,7 @@ def track_incoming_message(chat_id: int, user_id: str, text: str):
         "auto_replied": False,
     }
     _save_state(chat_id, data)
+    logger.info("Auto follow-up tracked incoming chat=%s user=%s", chat_id, user_id)
 
 
 def track_admin_reply(chat_id: int, user_id: str, text: str):
@@ -112,6 +113,7 @@ def track_admin_reply(chat_id: int, user_id: str, text: str):
         "auto_replied": False,
     }
     _save_state(chat_id, data)
+    logger.info("Auto follow-up cleared by admin reply chat=%s admin=%s", chat_id, user_id)
 
 
 def track_user_message(chat_id: int, user_id: str, text: str):
@@ -196,11 +198,16 @@ def mark_followup_sent(chat_id: int):
 async def send_auto_followup(bot, chat_id: int, text: str):
     try:
         from interaction.printer import send_human
-        await send_human(bot, chat_id, text)
+        ok = await send_human(bot, chat_id, text)
+        if not ok:
+            logger.error(f"Auto followup send_human returned false for chat {chat_id}")
+            return False
         logger.info(f"✅ Auto followup sent to chat {chat_id}")
     except Exception as e:
         logger.error(f"Failed to send auto followup: {e}")
         try:
             await bot.send_message(chat_id, text)
+            return True
         except Exception as e2:
             logger.error(f"Fallback send failed: {e2}")
+            return False
