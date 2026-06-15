@@ -1141,10 +1141,12 @@ def run_conversational_gmail_agent(user_id: str, user_text: str) -> Dict[str, An
         _save_agent_memory(user_id, mem)
         return {"reply": reply, "ui_actions": []}
 
-    messages = _build_messages(user_id, user_text)
+        messages = _build_messages(user_id, user_text)
     ui_actions: List[Dict[str, Any]] = []
 
     tool_round = 0
+    reply = "Sorry, kuch issue aa gaya."
+
     for _ in range(MAX_TOOL_ROUNDS):
         tool_round += 1
         logger.info("Gmail Agent round %d/%d for user=%s", tool_round, MAX_TOOL_ROUNDS, user_id)
@@ -1169,80 +1171,83 @@ def run_conversational_gmail_agent(user_id: str, user_text: str) -> Dict[str, An
             return {"reply": reply, "ui_actions": ui_actions}
 
         msg = completion.choices[0].message
-        tool_calls = getattr(msg, "tool_calls", None)
+        tool_calls = getattr(msg, "tool_calls", None) or []
 
-        if tool_calls:
-            logger.info("Round %d: Model called %d tool(s): %s", tool_round,
-                        len(tool_calls), [tc.function.name for tc in tool_calls])
+        # ===================== NO TOOL CALLS → Final Answer =====================
+        if not tool_calls:
+            reply = (msg.content or "").strip() or "Done."
+            break
 
-            assistant_tool_call_payload = []
-            for tc in tool_calls:
-                assistant_tool_call_payload.append(
-                    {
-                        "id": tc.id,
-                        "type": "function",
-                        "function": {
-                            "name": tc.function.name,
-                            "arguments": tc.function.arguments,
-                        },
-                    }
-                )
+        # ===================== TOOL CALLS PRESENT =====================
+        logger.info("Round %d: Model called %d tool(s): %s", tool_round,
+                    len(tool_calls), [tc.function.name for tc in tool_calls])
 
-            messages.append(
+        assistant_tool_call_payload = []
+        for tc in tool_calls:
+            assistant_tool_call_payload.append(
                 {
-                    "role": "assistant",
-                    "content": msg.content or "",
-                    "tool_calls": assistant_tool_call_payload,
+                    "id": tc.id,
+                    "type": "function",
+                    "function": {
+                        "name": tc.function.name,
+                        "arguments": tc.function.arguments,
+                    },
                 }
             )
 
-        stop_tool_loop = False  # NAYA: Loop break karne ke liye flag
+        messages.append(
+            {
+                "role": "assistant",
+                "content": msg.content or "",
+                "tool_calls": assistant_tool_call_payload,
+            }
+        )
+
+        stop_tool_loop = False
 
         for tc in tool_calls:
-                raw_args = tc.function.arguments or "{}"
-                try: 
-                    parsed_args = json.loads(raw_args)
-                except Exception: 
-                    parsed_args = {}
+            raw_args = tc.function.arguments or "{}"
+            try:
+                parsed_args = json.loads(raw_args)
+            except Exception:
+                parsed_args = {}
 
-                result = _execute_tool(user_id, tc.function.name, parsed_args)
+            result = _execute_tool(user_id, tc.function.name, parsed_args)
 
-                if result.get("ui_action"): 
-                    ui_actions.append(result)
-                
-                # NAYA: Agar connection nahi hai ya confirmation chahiye, toh aur tool calls mat karo
-                if result.get("error") == "gmail_not_connected" or result.get("needs_confirmation"):
-                    stop_tool_loop = True
+            if result.get("ui_action"):
+                ui_actions.append(result)
 
-                messages.append({"role": "tool", "tool_call_id": tc.id, "name": tc.function.name, "content": _json(result)})
+            if result.get("error") == "gmail_not_connected" or result.get("needs_confirmation"):
+                stop_tool_loop = True
+
+            messages.append({
+                "role": "tool",
+                "tool_call_id": tc.id,
+                "name": tc.function.name,
+                "content": _json(result)
+            })
 
         if stop_tool_loop:
-                # Loop tod do aur LLM se direct final natural reply generate karwao
-                try:
-                    final_completion = _safe_agent_completion(messages=messages, tools=None, temperature=0.2, max_tokens=400)
-                    reply = (final_completion.choices[0].message.content or "").strip()
-                except Exception:
-                    reply = "Bhai connection ya permission ka scene hai, please check karo."
-                break  # This stops the infinite tool loop
-        continue
-
-        # # No more tool calls → final answer
-        # reply = (msg.content or "").strip() or "Done."
-
-        # mem, _ = _load_agent_memory(user_id)
-        # _append_turn(mem, user_text, reply)
-        # _save_agent_memory(user_id, mem)
-
-        # logger.info("Gmail Agent finished in %d rounds", tool_round)
-        # return {"reply": reply, "ui_actions": ui_actions}
+            try:
+                final_completion = _safe_agent_completion(
+                    messages=messages, tools=None, temperature=0.25, max_tokens=450
+                )
+                reply = (final_completion.choices[0].message.content or "").strip()
+            except Exception:
+                reply = "Bhai connection ya permission ka scene hai, please check karo."
+            break
 
     # Safety limit hit
-    logger.warning("Gmail Agent hit MAX_TOOL_ROUNDS (%d) for user=%s", MAX_TOOL_ROUNDS, user_id)
-    reply = (
-        "Main thoda zyada tools use kar raha tha. "
-        "Thoda simple request se shuru karo ya specific batao kya chahiye (jaise 'latest 3 mails dikhao')."
-    )
+    if tool_round >= MAX_TOOL_ROUNDS and not reply:
+        logger.warning("Gmail Agent hit MAX_TOOL_ROUNDS (%d) for user=%s", MAX_TOOL_ROUNDS, user_id)
+        reply = (
+            "Main thoda zyada tools use kar raha tha. "
+            "Thoda simple request se shuru karo ya specific batao kya chahiye (jaise 'latest 3 mails dikhao')."
+        )
+
     mem, _ = _load_agent_memory(user_id)
     _append_turn(mem, user_text, reply)
     _save_agent_memory(user_id, mem)
+
+    logger.info("Gmail Agent finished in %d rounds", tool_round)
     return {"reply": reply, "ui_actions": ui_actions}
