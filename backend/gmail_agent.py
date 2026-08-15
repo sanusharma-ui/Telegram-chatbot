@@ -118,6 +118,12 @@ INBOX_HINTS = (
 
 READ_HINTS = ("read", "open", "padho", "kholo", "dikhao full", "full mail")
 
+COMPOSE_HINTS = (
+    "send email", "send mail", "write email", "write mail", "compose email",
+    "compose mail", "draft email", "draft mail", "create draft", "reply",
+    "forward", "email to", "mail to", "bhejo", "bhej do", "draft banao",
+)
+
 ARCHIVE_HINTS = ("archive", "hata do inbox", "inbox se hata")
 
 DELETE_HINTS = ("delete", "remove", "trash", "permanent", "mita do")
@@ -199,6 +205,41 @@ def _extract_ordinal(text: str) -> Optional[int]:
     if match:
         return max(1, int(match.group(1)))
     return None
+
+
+def _looks_like_compose_or_send(text: str) -> bool:
+    cleaned = _clean_text(text)
+    return any(hint in cleaned for hint in COMPOSE_HINTS)
+
+
+def _extract_subject_from_text(user_text: str) -> str:
+    text = user_text or ""
+    patterns = (
+        r"\bsubject\s*(?:is|:|-)?\s*['\"]?(.+?)(?:['\"]?\s+(?:body|message|saying|that|about)\b|$)",
+        r"\babout\s+['\"]?(.+?)['\"]?(?:\s+(?:saying|that|body|message)\b|$)",
+    )
+    for pattern in patterns:
+        match = re.search(pattern, text, flags=re.IGNORECASE)
+        if match:
+            subject = match.group(1).strip(" .,:;\"'")
+            if subject:
+                return subject[:120]
+    return "No subject"
+
+
+def _extract_compose_instructions(user_text: str) -> str:
+    text = user_text or ""
+    patterns = (
+        r"\b(?:body|message|saying|that)\s*[:,-]?\s*(.+)$",
+        r"\b(?:write|compose|draft|send)\s+(?:an?\s+)?(?:email|mail)\b\s*(.+)$",
+    )
+    for pattern in patterns:
+        match = re.search(pattern, text, flags=re.IGNORECASE)
+        if match:
+            instructions = match.group(1).strip(" .,:;")
+            if instructions:
+                return instructions
+    return text.strip() or "Write a concise professional email."
 
 
 def _build_search_query(user_text: str) -> str:
@@ -587,12 +628,12 @@ def _connect_needed_response(user_id: str) -> Dict[str, Any]:
     try:
         connect_action = _tool_connect(user_id)
         return {
-            "reply": "Gmail abhi connected nahi hai. Pehle securely connect kar lo, phir main inbox/search/draft ka kaam kar dunga.",
+            "reply": "Gmail is not connected yet. Please connect it securely first, then I can handle inbox, search, draft, and send actions.",
             "ui_actions": [connect_action],
         }
     except Exception:
         return {
-            "reply": "Gmail abhi connected nahi hai. `/gmail connect` use karke pehle connect kar lo.",
+            "reply": "Gmail is not connected yet. Please use `/gmail connect` first.",
             "ui_actions": [],
         }
 
@@ -646,25 +687,25 @@ def _resolve_thread_id_from_state(state: Dict[str, Any], user_text: str) -> Opti
 
 def _format_search_results(results: List[Dict[str, Any]]) -> str:
     if not results:
-        return "Koi matching email nahi mili."
+        return "No matching emails found."
 
-    lines = ["Ye emails mili:"]
+    lines = ["I found these emails:"]
     for idx, item in enumerate(results[:8], start=1):
         sender = item.get("from") or "Unknown sender"
         subject = item.get("subject") or "(no subject)"
         message_id = item.get("message_id") or ""
         lines.append(f"{idx}. {sender} | {subject}\nID: `{message_id}`")
-    lines.append("Agar kisi ko kholna ho toh bolo: `pehli wali kholo` ya message ID bhejo.")
+    lines.append("To open one, say `open the first one` or send the message ID.")
     return "\n".join(lines)
 
 
 def _format_tool_result_for_user(tool_name: str, result: Dict[str, Any]) -> str:
     if result.get("error") == "gmail_not_connected":
-        return "Gmail abhi connected nahi hai. Pehle connect karna padega."
+        return "Gmail is not connected yet. Please connect Gmail first."
     if result.get("needs_confirmation"):
-        return result.get("message", "Is action ke liye confirmation chahiye. Reply yes to continue or no to cancel.")
+        return result.get("message", "This action needs confirmation. Reply yes to continue or no to cancel.")
     if result.get("needs_clarification"):
-        return result.get("message", "Thoda clear batao kya karna hai?")
+        return result.get("message", "Please clarify what you want me to do.")
 
     if tool_name == "gmail_inbox_summary":
         return str(result.get("data") or "No recent emails found.")
@@ -680,21 +721,21 @@ def _format_tool_result_for_user(tool_name: str, result: Dict[str, Any]) -> str:
             f"{body[:3500] if body else '(No plain-text body found.)'}"
         )
     if tool_name == "gmail_summarize_thread":
-        return str(result.get("summary") or "Thread summarize nahi ho paya.")
+        return str(result.get("summary") or "I could not summarize that thread.")
     if tool_name == "gmail_modify_messages":
         return "Done." if result.get("ok") else f"Action failed: {result.get('error', 'unknown error')}"
     if tool_name == "gmail_create_label":
         label = result.get("label") or {}
-        return f"Label created: {label.get('name', 'new label')}" if result.get("ok") else "Label create nahi ho paya."
+        return f"Label created: {label.get('name', 'new label')}" if result.get("ok") else "I could not create the label."
     if tool_name == "gmail_list_labels":
         labels = result.get("labels") or []
         if not labels:
-            return "Koi labels nahi mile."
+            return "No labels found."
         return "\n".join(["Your labels:"] + [f"- {x.get('name')} (`{x.get('id')}`)" for x in labels[:30]])
     if tool_name == "gmail_list_attachments":
         attachments = result.get("attachments") or []
         if not attachments:
-            return "Is email me attachments nahi mile."
+            return "No attachments found on this email."
         return "\n".join(["Attachments:"] + [f"- {x.get('filename') or x.get('name') or 'attachment'}" for x in attachments])
     if tool_name == "gmail_create_draft":
         return (
@@ -702,7 +743,7 @@ def _format_tool_result_for_user(tool_name: str, result: Dict[str, Any]) -> str:
             f"To: {result.get('to')}\n"
             f"Subject: {result.get('subject')}\n\n"
             f"{result.get('body_preview')}\n\n"
-            f"Send karna ho toh bolo: `send draft {result.get('draft_id')}`"
+            f"To send it, reply: `send draft {result.get('draft_id')}`"
         )
 
     return "Done." if result.get("ok") else f"Action failed: {result.get('error', 'unknown error')}"
@@ -719,13 +760,31 @@ def _try_direct_gmail_action(user_id: str, user_text: str) -> Optional[Dict[str,
     mem, state = _load_agent_memory(user_id)
 
     if "disconnect" in text and not _gmail_connected(user_id):
-        return {"reply": "Gmail already connected nahi lag raha, disconnect karne ke liye kuch pending nahi hai.", "ui_actions": []}
+        return {"reply": "Gmail does not appear to be connected, so there is nothing to disconnect.", "ui_actions": []}
 
     if not _gmail_connected(user_id):
         return _connect_needed_response(user_id)
 
     if "connect" in text and "disconnect" not in text:
         return _run_tool_and_format(user_id, "gmail_connect", {})
+
+    draft_send_match = re.search(r"\bsend\s+draft\s+([A-Za-z0-9_-]+)\b", user_text or "", flags=re.IGNORECASE)
+    if draft_send_match:
+        return _run_tool_and_format(
+            user_id,
+            "gmail_send_draft",
+            {"draft_id": draft_send_match.group(1), "confirmed": False},
+        )
+
+    if _looks_like_compose_or_send(text) and _extract_email_addresses(user_text):
+        to_addr = _extract_email_addresses(user_text)[0]
+        subject = _extract_subject_from_text(user_text)
+        instructions = _extract_compose_instructions(user_text)
+        return _run_tool_and_format(
+            user_id,
+            "gmail_create_draft",
+            {"to": to_addr, "subject": subject, "instructions": instructions},
+        )
 
     explicit_search = any(x in text for x in ("search", "find", "look for", "khojo", "dhundo", "dhoondo", "talash"))
 
@@ -749,13 +808,13 @@ def _try_direct_gmail_action(user_id: str, user_text: str) -> Optional[Dict[str,
     if "thread" in text or "conversation" in text:
         thread_id = _resolve_thread_id_from_state(state, user_text)
         if not thread_id:
-            return {"reply": "Kaunsa thread summarize karna hai? Pehle search result ya thread ID bhejo.", "ui_actions": []}
+            return {"reply": "Which thread should I summarize? Send a thread ID or refer to a search result.", "ui_actions": []}
         return _run_tool_and_format(user_id, "gmail_summarize_thread", {"thread_id": thread_id})
 
     if _contains_any(text, READ_HINTS) or _extract_ordinal(text) is not None:
         message_ids = _resolve_message_ids_from_state(state, user_text)
         if not message_ids:
-            return {"reply": "Kaunsi email kholni hai? Pehle search/inbox result dikhao ya message ID bhejo.", "ui_actions": []}
+            return {"reply": "Which email should I open? Send a message ID or refer to a recent search/inbox result.", "ui_actions": []}
         return _run_tool_and_format(user_id, "gmail_read_message", {"message_id": message_ids[0]})
 
     action = None
@@ -773,7 +832,7 @@ def _try_direct_gmail_action(user_id: str, user_text: str) -> Optional[Dict[str,
     if action:
         message_ids = _resolve_message_ids_from_state(state, user_text, allow_many=True)
         if not message_ids:
-            return {"reply": "Kaunsi email par action lena hai? Search result number ya message ID batao.", "ui_actions": []}
+            return {"reply": "Which email should I update? Send the result number or message ID.", "ui_actions": []}
         return _run_tool_and_format(
             user_id,
             "gmail_modify_messages",
@@ -783,7 +842,7 @@ def _try_direct_gmail_action(user_id: str, user_text: str) -> Optional[Dict[str,
     if "attachment" in text or "attachments" in text:
         message_ids = _resolve_message_ids_from_state(state, user_text)
         if not message_ids:
-            return {"reply": "Kaunsi email ke attachments dekhne hain? Message ID ya result number batao.", "ui_actions": []}
+            return {"reply": "Which email's attachments should I check? Send the result number or message ID.", "ui_actions": []}
         return _run_tool_and_format(user_id, "gmail_list_attachments", {"message_id": message_ids[0]})
 
     if "label" in text and any(x in text for x in ("list", "dikhao", "show")):
@@ -885,7 +944,7 @@ TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "gmail_create_draft",
-            "description": "Create a Gmail draft using natural instructions. Best tool when user wants to send or reply to an email. Hinglish instructions allowed.",
+            "description": "Create a Gmail draft using natural instructions. Best tool when user wants to send or reply to an email.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -1354,17 +1413,17 @@ You are Aisha, a helpful and efficient Gmail assistant inside a Telegram bot.
 You can chat normally OR use tools to perform real Gmail actions.
 
 CRITICAL RULES FOR EFFICIENT AGENT BEHAVIOR:
-1. Use the MINIMUM number of tools necessary to solve the user's request.
-2. After getting search results, if the user wants to read/summarize/draft, call the next tool immediately.
-3. Once you have enough information, STOP calling tools and give a clear, natural final reply.
-4. Never call the same tool repeatedly with similar arguments.
-5. If a tool returns an error (especially "gmail_not_connected"), tell the user clearly instead of retrying.
-6. For any destructive action (send, delete, disconnect), always ask for explicit confirmation first using confirmed=false.
-7. Never invent email content, recipients, or facts.
-8. Keep final replies short, friendly, and in Hinglish when user speaks Hinglish.
-9. If the request is not clearly about Gmail, just reply normally without using any Gmail tools.
-10. For "search/find/khojo/dhundo/dikhao" requests, use gmail_search. If the user gives an email address, search that address.
-11. For "first one/pehli wali/that mail/ye mail" use the current state instead of asking again.
+1. Understand the user's intent first, then choose the smallest correct action.
+2. Use the minimum number of tools necessary. Do not repeat the same tool call with similar arguments.
+3. Show/read/search inbox requests should use inbox, search, or read tools as appropriate.
+4. Compose/send requests should create a draft first unless an existing draft ID is provided.
+5. Actual send, delete, and disconnect actions are sensitive. Always require explicit confirmation first using confirmed=false.
+6. If a tool returns an error, especially "gmail_not_connected", explain the next step clearly and stop retrying.
+7. Never invent recipients, email content, message IDs, thread IDs, or facts.
+8. If required details are missing, ask one short clarification question.
+9. If the request is not clearly about Gmail, reply normally without Gmail tools.
+10. Use current state to resolve references like "first one", "that email", "this thread", or "last draft".
+11. Final replies must be concise, professional English. Do not use Hinglish.
 
 Current state is always shown below. Use it to resolve "first one", "that mail", "last draft" etc.
 """.strip()
@@ -1485,7 +1544,7 @@ def run_conversational_gmail_agent(user_id: str, user_text: str) -> Dict[str, An
     route_info = decide_route(user_id, user_text)
     
     if route_info.get("route") == "clarify":
-        reply = route_info.get("clarification", "Bhai isko thoda clear batao, kya karna hai?")
+        reply = route_info.get("clarification", "Please clarify what you want me to do.")
         mem, _ = _load_agent_memory(user_id)
         _append_turn(mem, user_text, reply)
         _save_agent_memory(user_id, mem)
@@ -1498,7 +1557,7 @@ def run_conversational_gmail_agent(user_id: str, user_text: str) -> Dict[str, An
             resp = _safe_agent_completion(messages=messages, tools=None, temperature=0.6, max_tokens=600)
             reply = resp.choices[0].message.content.strip()
         except Exception:
-            reply = "Bhai abhi Groq me thoda issue hai, thodi der baad try karna."
+            reply = "The AI provider is temporarily unavailable. Please try again shortly."
         mem, _ = _load_agent_memory(user_id)
         _append_turn(mem, user_text, reply)
         _save_agent_memory(user_id, mem)
@@ -1542,8 +1601,8 @@ def run_conversational_gmail_agent(user_id: str, user_text: str) -> Dict[str, An
         except Exception as e:
             logger.error(f"Gmail agent LLM call failed after all fallbacks in round {tool_round}: {e}")
             reply = (
-                "Bhai Groq ka daily token limit almost khatam ho gaya hai. "
-                "Thodi der (10-15 min) baad try karna. Abhi simple requests se kaam chala lo."
+                "The AI provider is temporarily rate-limited. "
+                "Please try again in 10-15 minutes."
             )
             mem, _ = _load_agent_memory(user_id)
             _append_turn(mem, user_text, reply)
@@ -1629,19 +1688,19 @@ def run_conversational_gmail_agent(user_id: str, user_text: str) -> Dict[str, An
                 )
                 reply = (final_completion.choices[0].message.content or "").strip()
             except Exception:
-                reply = "Bhai connection ya permission ka scene hai, please check karo."
+                reply = "There is a connection or permission issue. Please check Gmail access and try again."
             break
 
     # Safety limit hit
     if tool_round >= MAX_TOOL_ROUNDS and not reply:
         logger.warning("Gmail Agent hit MAX_TOOL_ROUNDS (%d) for user=%s", MAX_TOOL_ROUNDS, user_id)
         reply = (
-            "Main thoda zyada tools use kar raha tha. "
-            "Thoda simple request se shuru karo ya specific batao kya chahiye (jaise 'latest 3 mails dikhao')."
+            "I could not complete that efficiently. "
+            "Please make the request more specific, for example: `show my latest 3 emails`."
         )
 
     if not reply:
-        reply = "Bhai request samajh gaya, but complete karne se pehle thoda specific bata do kya action chahiye."
+        reply = "I understand the request, but I need one more detail before I can complete it."
 
     mem, _ = _load_agent_memory(user_id)
     _append_turn(mem, user_text, reply)

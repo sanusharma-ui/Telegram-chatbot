@@ -509,8 +509,8 @@ def generate_response_impl(
             except Exception as error:
                 logger.exception("Gemini image call failed: %s", error)
                 if is_gemini_quota_error(error):
-                    return "Gemini quota exhausted ho gaya hai, isliye image abhi process nahi ho pa rahi. Thodi der baad phir try karo."
-                return "Image request Gemini par fail ho gaya. Logs check karo."
+                    return "Gemini quota is exhausted, so I cannot process the image right now. Please try again later."
+                return "The image request failed on Gemini. Please check the logs."
 
         # Text => Gemini primary, Groq fallback
         # else:
@@ -545,8 +545,8 @@ def generate_response_impl(
                 except Exception as gemini_error:
                     logger.exception("Gemini fallback also failed: %s", gemini_error)
                     if is_gemini_quota_error(gemini_error):
-                        return "Bhai Groq aur Gemini dono busy hain abhi. 1-2 min baad try karna."
-                    return "Sorry, dono providers mein issue aa raha hai. Thodi der baad try karo."
+                        return "Groq and Gemini are both busy right now. Please try again in 1-2 minutes."
+                    return "Sorry, both providers are having issues. Please try again later."
 
         if raw_response is None:
             return "It appears the models are currently unavailable. Please try again in a bit."

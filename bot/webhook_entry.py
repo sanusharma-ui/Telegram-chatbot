@@ -595,7 +595,7 @@ async def process_update(update: Dict[str, Any]):
 
             except Exception as e:
                 logger.exception("Gmail natural agent failed: %s", e)
-                await send_human(bot, chat_id, "❌ Gmail agent mein kuch issue ho gaya. Thoda baad mein try karo.")
+                await send_human(bot, chat_id, "Gmail agent hit an issue. Please try again shortly.")
                 return
 
         # ---------------- Fallback: normal conversational reply ----------------

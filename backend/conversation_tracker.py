@@ -158,18 +158,18 @@ def get_inactive_conversations() -> list[Dict[str, Any]]:
 
 
 def generate_smart_followup(last_message: str, user_id: str, chat_id: int) -> str:
-    prompt = f"""Telegram par saamne wale person ka last message tha: "{last_message}"
+    prompt = f"""The other person's last Telegram message was: "{last_message}"
 
-Admin ne 5 minute ke andar reply nahi kiya, isliye tum admin ki taraf se ek natural human-like reply bhej rahe ho.
+The admin did not reply within 5 minutes, so write one natural, human-like follow-up on the admin's behalf.
 Rules:
-- Aisa na lage ki bot auto-message kar raha hai
-- Last message ka context pakdo aur simple response do
-- Agar context unclear ho toh ek warm, light question poochho
-- Zyada pushy, salesy, ya robotic mat banao
-- Hinglish/English wahi use karo jo message ke tone se natural lage
-- Max 1-2 short lines
+- Do not make it sound like an automated bot message
+- Use the context of the last message and respond simply
+- If the context is unclear, ask one warm, light question
+- Do not sound pushy, salesy, or robotic
+- Write in clear, professional English only
+- Maximum 1-2 short lines
 
-Sirf message likho, koi explanation mat do."""
+Write only the message, with no explanation."""
 
     try:
         reply = generate_response(
@@ -177,10 +177,10 @@ Sirf message likho, koi explanation mat do."""
             persona_key=user_id,
             user_ip=str(user_id)
         )
-        return (reply or "Bhai, sab theek? Kya chal raha hai?").strip()
+        return (reply or "Hi, just checking in. Is everything okay?").strip()
     except Exception as e:
         logger.warning(f"Followup generation failed: {e}")
-        return "Bhai, kuch baat karni thi kya? 😊"
+        return "Hi, did you want to discuss something?"
 
 
 def mark_followup_sent(chat_id: int):

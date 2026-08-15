@@ -519,7 +519,7 @@ async def handle_all(message: Message):
                 await send_human(bot, chat_id, reply_text)
             except Exception as e:
                 logger.exception("normal chat failed", exc_info=True)
-                await send_human(bot, chat_id, "Sorry bhai, kuch issue ho gaya... 😔")
+                await send_human(bot, chat_id, "Sorry, something went wrong. Please try again.")
 
         asyncio.create_task(normal_chat_task())
         return
