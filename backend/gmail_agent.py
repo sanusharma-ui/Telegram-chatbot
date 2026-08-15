@@ -101,7 +101,46 @@ ROLEPLAY_HINTS = (
 GMAIL_HINTS_STRICT = (
     "gmail", "mail", "email", "inbox", "draft", "reply", "thread", "attachment",
     "attachments", "subject", "send", "archive", "delete", "label", "labels",
-    "read", "open mail", "search mail", "compose", "forward", "unread", "star"
+    "read", "open mail", "search mail", "compose", "forward", "unread", "star",
+    "dikhao", "dikhado", "khojo", "dhundo", "dhoondo", "talash", "padho",
+    "kholo", "bhejna", "bhejo", "bhej do", "connect karo", "latest", "recent"
+)
+
+SEARCH_HINTS = (
+    "search", "find", "look for", "show me", "dikhao", "dikhado", "khojo",
+    "dhundo", "dhoondo", "talash", "nikaalo", "nikalo"
+)
+
+INBOX_HINTS = (
+    "inbox", "latest", "recent", "new mail", "new mails", "latest mail",
+    "latest mails", "recent mail", "recent mails", "aayi hai", "aaya hai"
+)
+
+READ_HINTS = ("read", "open", "padho", "kholo", "dikhao full", "full mail")
+
+ARCHIVE_HINTS = ("archive", "hata do inbox", "inbox se hata")
+
+DELETE_HINTS = ("delete", "remove", "trash", "permanent", "mita do")
+
+STAR_HINTS = ("star", "favorite", "favourite", "important mark")
+
+UNREAD_HINTS = ("unread", "mark unread", "unread mark")
+
+READ_MARK_HINTS = ("mark read", "read mark", "seen mark")
+
+ORDINAL_WORDS = {
+    "first": 1, "1st": 1, "one": 1, "pehla": 1, "pehli": 1, "pahla": 1, "pahli": 1,
+    "second": 2, "2nd": 2, "dusra": 2, "dusri": 2, "doosra": 2, "doosri": 2,
+    "third": 3, "3rd": 3, "teesra": 3, "teesri": 3,
+    "fourth": 4, "4th": 4, "chautha": 4, "chauthi": 4,
+    "fifth": 5, "5th": 5, "paanchwa": 5, "panchwa": 5,
+    "last": -1, "latest": 1, "recent": 1, "that": 0, "this": 0, "it": 0,
+    "wo": 0, "woh": 0, "ye": 0, "yeh": 0, "us": 0, "ussi": 0,
+}
+
+GMAIL_OBJECT_HINTS = (
+    "gmail", "mail", "mails", "email", "emails", "inbox", "draft", "reply",
+    "thread", "attachment", "attachments", "subject", "label", "labels"
 )
 
 CONFIRM_HINTS = (
@@ -125,7 +164,78 @@ def _looks_like_roleplay(text: str) -> bool:
 
 def _looks_like_gmail(text: str) -> bool:
     text = _clean_text(text)
-    return any(h in text for h in GMAIL_HINTS_STRICT) or "@" in text
+    if "@" in text:
+        return True
+    if any(h in text for h in GMAIL_OBJECT_HINTS):
+        return True
+    if any(h in text for h in ("first one", "pehli wali", "that mail", "ye mail", "woh mail")):
+        return True
+    return False
+
+
+def _contains_any(text: str, hints: tuple[str, ...]) -> bool:
+    text = _clean_text(text)
+    return any(h in text for h in hints)
+
+
+def _extract_email_addresses(text: str) -> List[str]:
+    return re.findall(r"[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}", text or "")
+
+
+def _extract_max_results(text: str, default: int = 10) -> int:
+    match = re.search(r"\b(\d{1,2})\b", text or "")
+    if not match:
+        return default
+    return max(1, min(int(match.group(1)), 20))
+
+
+def _extract_ordinal(text: str) -> Optional[int]:
+    lower = _clean_text(text)
+    for word, value in ORDINAL_WORDS.items():
+        if re.search(rf"\b{re.escape(word)}\b", lower):
+            return value
+
+    match = re.search(r"\b(\d{1,2})(?:st|nd|rd|th)?\b", lower)
+    if match:
+        return max(1, int(match.group(1)))
+    return None
+
+
+def _build_search_query(user_text: str) -> str:
+    text = _clean_text(user_text)
+    emails = _extract_email_addresses(user_text)
+
+    if emails:
+        if any(x in text for x in ("from", "sender", "bheja", "bheji", "se mail", "se email")):
+            return f"from:{emails[0]}"
+        if any(x in text for x in ("to", "sent to", "ko bheja", "ko mail")):
+            return f"to:{emails[0]}"
+        return emails[0]
+
+    subject_match = re.search(r"(?:subject|sub(?:ject)? me|title me)\s+(.+)$", text)
+    if subject_match:
+        keyword = subject_match.group(1).strip(" '\"")
+        return f"subject:{keyword}" if keyword else "in:inbox"
+
+    quoted = re.findall(r"['\"]([^'\"]{2,80})['\"]", user_text or "")
+    if quoted:
+        return quoted[0].strip()
+
+    cleaned = text
+    cleanup_phrases = (
+        "email search karo", "emails search karo", "mail search karo", "mails search karo",
+        "search email", "search mail", "search mails", "find email", "find mail",
+        "email dikhao", "emails dikhao", "mail dikhao", "mails dikhao",
+        "khojo", "dhundo", "dhoondo", "talash karo", "show me", "look for",
+        "please", "pls", "bhai", "yaar", "mere", "meri", "mera", "ke", "ka", "ki"
+    )
+    for phrase in cleanup_phrases:
+        cleaned = cleaned.replace(phrase, " ")
+    cleaned = re.sub(r"\s+", " ", cleaned).strip(" .,:;")
+
+    if not cleaned or cleaned in {"email", "emails", "mail", "mails", "inbox"}:
+        return "in:inbox"
+    return cleaned
 
 
 def _looks_like_confirmation(text: str) -> bool:
@@ -306,7 +416,9 @@ def decide_route(user_id: str, user_text: str) -> RouteResult:
     if _looks_like_gmail(text):
         if any(x in text for x in (
             "draft", "compose", "reply", "send", "inbox", "thread", "read", "search",
-            "archive", "delete", "label", "attachment", "attachments", "connect", "disconnect"
+            "archive", "delete", "label", "attachment", "attachments", "connect", "disconnect",
+            "latest", "recent", "dikhao", "dikhado", "khojo", "dhundo", "dhoondo",
+            "padho", "kholo", "bhejo", "bhej do"
         )) or "@" in text:
             return {"route": "gmail", "confidence": 0.9, "gmail_action": "unknown"}
 
@@ -469,6 +581,215 @@ Recent search results:
 Recent labels:
 {label_text}
 """.strip()
+
+
+def _connect_needed_response(user_id: str) -> Dict[str, Any]:
+    try:
+        connect_action = _tool_connect(user_id)
+        return {
+            "reply": "Gmail abhi connected nahi hai. Pehle securely connect kar lo, phir main inbox/search/draft ka kaam kar dunga.",
+            "ui_actions": [connect_action],
+        }
+    except Exception:
+        return {
+            "reply": "Gmail abhi connected nahi hai. `/gmail connect` use karke pehle connect kar lo.",
+            "ui_actions": [],
+        }
+
+
+def _resolve_message_ids_from_state(state: Dict[str, Any], user_text: str, allow_many: bool = False) -> List[str]:
+    text = _clean_text(user_text)
+    explicit_ids = re.findall(r"\b(?:msg_|[a-f0-9]{12,})\b", user_text or "", flags=re.IGNORECASE)
+    if explicit_ids:
+        return explicit_ids
+
+    results = state.get("last_search_results", []) or []
+    if not results:
+        last_id = state.get("last_message_id")
+        return [last_id] if last_id else []
+
+    if allow_many and any(x in text for x in ("all", "sab", "saare", "sare", "these", "ye sab", "those")):
+        return [item.get("message_id") for item in results if item.get("message_id")]
+
+    ordinal = _extract_ordinal(text)
+    if ordinal == -1:
+        item = results[-1]
+    elif ordinal and ordinal > 0:
+        item = results[ordinal - 1] if len(results) >= ordinal else None
+    else:
+        item = results[0] if any(x in text for x in ("that", "this", "it", "wo", "woh", "ye", "yeh", "us")) else None
+
+    if item and item.get("message_id"):
+        return [item["message_id"]]
+
+    last_id = state.get("last_message_id")
+    return [last_id] if last_id else []
+
+
+def _resolve_thread_id_from_state(state: Dict[str, Any], user_text: str) -> Optional[str]:
+    explicit = re.search(r"\bthread(?:_id)?[:\s]+([A-Za-z0-9_-]+)", user_text or "", flags=re.IGNORECASE)
+    if explicit:
+        return explicit.group(1)
+
+    results = state.get("last_search_results", []) or []
+    ordinal = _extract_ordinal(user_text)
+    if results:
+        if ordinal == -1:
+            item = results[-1]
+        elif ordinal and ordinal > 0 and len(results) >= ordinal:
+            item = results[ordinal - 1]
+        else:
+            item = results[0]
+        return item.get("thread_id")
+    return state.get("last_thread_id")
+
+
+def _format_search_results(results: List[Dict[str, Any]]) -> str:
+    if not results:
+        return "Koi matching email nahi mili."
+
+    lines = ["Ye emails mili:"]
+    for idx, item in enumerate(results[:8], start=1):
+        sender = item.get("from") or "Unknown sender"
+        subject = item.get("subject") or "(no subject)"
+        message_id = item.get("message_id") or ""
+        lines.append(f"{idx}. {sender} | {subject}\nID: `{message_id}`")
+    lines.append("Agar kisi ko kholna ho toh bolo: `pehli wali kholo` ya message ID bhejo.")
+    return "\n".join(lines)
+
+
+def _format_tool_result_for_user(tool_name: str, result: Dict[str, Any]) -> str:
+    if result.get("error") == "gmail_not_connected":
+        return "Gmail abhi connected nahi hai. Pehle connect karna padega."
+    if result.get("needs_confirmation"):
+        return result.get("message", "Is action ke liye confirmation chahiye. Reply yes to continue or no to cancel.")
+    if result.get("needs_clarification"):
+        return result.get("message", "Thoda clear batao kya karna hai?")
+
+    if tool_name == "gmail_inbox_summary":
+        return str(result.get("data") or "No recent emails found.")
+    if tool_name == "gmail_search":
+        return _format_search_results(result.get("results", []) or [])
+    if tool_name == "gmail_read_message":
+        email = result.get("email") or {}
+        body = (email.get("body") or "").strip()
+        return (
+            f"From: {email.get('from')}\n"
+            f"Subject: {email.get('subject')}\n"
+            f"Date: {email.get('date')}\n\n"
+            f"{body[:3500] if body else '(No plain-text body found.)'}"
+        )
+    if tool_name == "gmail_summarize_thread":
+        return str(result.get("summary") or "Thread summarize nahi ho paya.")
+    if tool_name == "gmail_modify_messages":
+        return "Done." if result.get("ok") else f"Action failed: {result.get('error', 'unknown error')}"
+    if tool_name == "gmail_create_label":
+        label = result.get("label") or {}
+        return f"Label created: {label.get('name', 'new label')}" if result.get("ok") else "Label create nahi ho paya."
+    if tool_name == "gmail_list_labels":
+        labels = result.get("labels") or []
+        if not labels:
+            return "Koi labels nahi mile."
+        return "\n".join(["Your labels:"] + [f"- {x.get('name')} (`{x.get('id')}`)" for x in labels[:30]])
+    if tool_name == "gmail_list_attachments":
+        attachments = result.get("attachments") or []
+        if not attachments:
+            return "Is email me attachments nahi mile."
+        return "\n".join(["Attachments:"] + [f"- {x.get('filename') or x.get('name') or 'attachment'}" for x in attachments])
+    if tool_name == "gmail_create_draft":
+        return (
+            "Draft created.\n\n"
+            f"To: {result.get('to')}\n"
+            f"Subject: {result.get('subject')}\n\n"
+            f"{result.get('body_preview')}\n\n"
+            f"Send karna ho toh bolo: `send draft {result.get('draft_id')}`"
+        )
+
+    return "Done." if result.get("ok") else f"Action failed: {result.get('error', 'unknown error')}"
+
+
+def _run_tool_and_format(user_id: str, tool_name: str, args: Dict[str, Any]) -> Dict[str, Any]:
+    result = _execute_tool(user_id, tool_name, args)
+    ui_actions = [result] if result.get("ui_action") else []
+    return {"reply": _format_tool_result_for_user(tool_name, result), "ui_actions": ui_actions}
+
+
+def _try_direct_gmail_action(user_id: str, user_text: str) -> Optional[Dict[str, Any]]:
+    text = _clean_text(user_text)
+    mem, state = _load_agent_memory(user_id)
+
+    if "disconnect" in text and not _gmail_connected(user_id):
+        return {"reply": "Gmail already connected nahi lag raha, disconnect karne ke liye kuch pending nahi hai.", "ui_actions": []}
+
+    if not _gmail_connected(user_id):
+        return _connect_needed_response(user_id)
+
+    if "connect" in text and "disconnect" not in text:
+        return _run_tool_and_format(user_id, "gmail_connect", {})
+
+    explicit_search = any(x in text for x in ("search", "find", "look for", "khojo", "dhundo", "dhoondo", "talash"))
+
+    if _contains_any(text, INBOX_HINTS) and not explicit_search and not _extract_email_addresses(user_text):
+        return _run_tool_and_format(
+            user_id,
+            "gmail_inbox_summary",
+            {"smart": "summary" in text or "smart" in text, "max_results": _extract_max_results(text, 10)},
+        )
+
+    if explicit_search or _extract_email_addresses(user_text) or (
+        _contains_any(text, SEARCH_HINTS) and any(x in text for x in GMAIL_OBJECT_HINTS)
+    ):
+        query = _build_search_query(user_text)
+        return _run_tool_and_format(
+            user_id,
+            "gmail_search",
+            {"query": query, "max_results": _extract_max_results(text, 10)},
+        )
+
+    if "thread" in text or "conversation" in text:
+        thread_id = _resolve_thread_id_from_state(state, user_text)
+        if not thread_id:
+            return {"reply": "Kaunsa thread summarize karna hai? Pehle search result ya thread ID bhejo.", "ui_actions": []}
+        return _run_tool_and_format(user_id, "gmail_summarize_thread", {"thread_id": thread_id})
+
+    if _contains_any(text, READ_HINTS) or _extract_ordinal(text) is not None:
+        message_ids = _resolve_message_ids_from_state(state, user_text)
+        if not message_ids:
+            return {"reply": "Kaunsi email kholni hai? Pehle search/inbox result dikhao ya message ID bhejo.", "ui_actions": []}
+        return _run_tool_and_format(user_id, "gmail_read_message", {"message_id": message_ids[0]})
+
+    action = None
+    if _contains_any(text, ARCHIVE_HINTS):
+        action = "archive"
+    elif _contains_any(text, DELETE_HINTS):
+        action = "delete"
+    elif _contains_any(text, STAR_HINTS):
+        action = "star"
+    elif _contains_any(text, UNREAD_HINTS):
+        action = "unread"
+    elif _contains_any(text, READ_MARK_HINTS):
+        action = "read"
+
+    if action:
+        message_ids = _resolve_message_ids_from_state(state, user_text, allow_many=True)
+        if not message_ids:
+            return {"reply": "Kaunsi email par action lena hai? Search result number ya message ID batao.", "ui_actions": []}
+        return _run_tool_and_format(
+            user_id,
+            "gmail_modify_messages",
+            {"action": action, "message_ids": message_ids, "confirmed": False},
+        )
+
+    if "attachment" in text or "attachments" in text:
+        message_ids = _resolve_message_ids_from_state(state, user_text)
+        if not message_ids:
+            return {"reply": "Kaunsi email ke attachments dekhne hain? Message ID ya result number batao.", "ui_actions": []}
+        return _run_tool_and_format(user_id, "gmail_list_attachments", {"message_id": message_ids[0]})
+
+    if "label" in text and any(x in text for x in ("list", "dikhao", "show")):
+        return _run_tool_and_format(user_id, "gmail_list_labels", {})
+
+    return None
 
 
 TOOL_SCHEMAS = [
@@ -1042,6 +1363,8 @@ CRITICAL RULES FOR EFFICIENT AGENT BEHAVIOR:
 7. Never invent email content, recipients, or facts.
 8. Keep final replies short, friendly, and in Hinglish when user speaks Hinglish.
 9. If the request is not clearly about Gmail, just reply normally without using any Gmail tools.
+10. For "search/find/khojo/dhundo/dikhao" requests, use gmail_search. If the user gives an email address, search that address.
+11. For "first one/pehli wali/that mail/ye mail" use the current state instead of asking again.
 
 Current state is always shown below. Use it to resolve "first one", "that mail", "last draft" etc.
 """.strip()
@@ -1068,11 +1391,64 @@ def _build_messages(user_id: str, user_text: str) -> List[Dict[str, Any]]:
     return messages
 
 
-def _execute_tool(user_id: str, name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
+def _repair_tool_args(user_id: str, name: str, arguments: Dict[str, Any], user_text: str = "") -> Dict[str, Any]:
+    args = dict(arguments or {})
+    mem, state = _load_agent_memory(user_id)
+
+    if name == "gmail_search":
+        query = str(args.get("query") or "").strip()
+        if not query or query.lower() in {"email", "mail", "emails", "mails", "search"}:
+            args["query"] = _build_search_query(user_text)
+        args["max_results"] = _as_int(args.get("max_results"), _extract_max_results(user_text, 10))
+
+    if name == "gmail_inbox_summary":
+        args["max_results"] = _as_int(args.get("max_results"), _extract_max_results(user_text, 10))
+        args["smart"] = bool(args.get("smart")) or "summary" in _clean_text(user_text)
+
+    if name in {"gmail_read_message", "gmail_list_attachments"} and not args.get("message_id"):
+        ids = _resolve_message_ids_from_state(state, user_text)
+        if ids:
+            args["message_id"] = ids[0]
+
+    if name == "gmail_summarize_thread" and not args.get("thread_id"):
+        thread_id = _resolve_thread_id_from_state(state, user_text)
+        if thread_id:
+            args["thread_id"] = thread_id
+
+    if name == "gmail_modify_messages":
+        if not args.get("message_ids"):
+            args["message_ids"] = _resolve_message_ids_from_state(state, user_text, allow_many=True)
+        action = str(args.get("action") or "").lower()
+        if action == "delete":
+            args["confirmed"] = False
+        elif "confirmed" not in args:
+            args["confirmed"] = False
+
+    if name == "gmail_send_draft":
+        if not args.get("draft_id") and state.get("last_draft_id"):
+            args["draft_id"] = state["last_draft_id"]
+        if "confirmed" not in args:
+            args["confirmed"] = False
+
+    if name in {"gmail_disconnect", "gmail_delete_label"} and "confirmed" not in args:
+        args["confirmed"] = False
+
+    if name == "gmail_delete_label" and not args.get("label_id"):
+        labels = state.get("last_labels", []) or []
+        ordinal = _extract_ordinal(user_text)
+        if labels and ordinal and ordinal > 0 and len(labels) >= ordinal:
+            args["label_id"] = labels[ordinal - 1].get("id")
+
+    return args
+
+
+def _execute_tool(user_id: str, name: str, arguments: Dict[str, Any], user_text: str = "") -> Dict[str, Any]:
     fn = TOOL_IMPL.get(name)
     if not fn:
         logger.warning("Unknown tool called: %s", name)
         return {"ok": False, "error": f"unknown_tool:{name}"}
+
+    arguments = _repair_tool_args(user_id, name, arguments, user_text)
 
     logger.info("→ Executing tool: %s | args=%s", name, arguments)
 
@@ -1135,6 +1511,13 @@ def run_conversational_gmail_agent(user_id: str, user_text: str) -> Dict[str, An
         _append_turn(mem, user_text, reply)
         _save_agent_memory(user_id, mem)
         return {"reply": reply, "ui_actions": []}
+
+    direct_result = _try_direct_gmail_action(user_id, user_text)
+    if direct_result:
+        mem, _ = _load_agent_memory(user_id)
+        _append_turn(mem, user_text, direct_result.get("reply", "Done."))
+        _save_agent_memory(user_id, mem)
+        return direct_result
 
     # === GMAIL PATH: now safe, messages is always defined here ===
     messages = _build_messages(user_id, user_text)
@@ -1220,12 +1603,16 @@ def run_conversational_gmail_agent(user_id: str, user_text: str) -> Dict[str, An
                 stop_tool_loop = True
             else:
                 seen_tool_calls.add(call_signature)
-                result = _execute_tool(user_id, tc.function.name, parsed_args)
+                result = _execute_tool(user_id, tc.function.name, parsed_args, user_text=user_text)
 
             if result.get("ui_action"):
                 ui_actions.append(result)
 
-            if result.get("error") in {"gmail_not_connected", "duplicate_tool_call_stopped"} or result.get("needs_confirmation"):
+            if (
+                result.get("error") in {"gmail_not_connected", "duplicate_tool_call_stopped"}
+                or result.get("needs_confirmation")
+                or result.get("needs_clarification")
+            ):
                 stop_tool_loop = True
 
             messages.append({
